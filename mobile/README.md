@@ -78,7 +78,7 @@ That response is **`GET /` on the Django API**, not the Expo web app. The **Expo
 
 ### Vercel build logs show Python / `requirements.txt` / dashboard warning
 
-If the log says **`Due to builds existing in your configuration file, the Build and Development Settings… will not apply`**, an old **root** `vercel.json` with legacy **`builds`** may be in use — that pipeline often **skips `buildCommand`**, so Django **`migrate` never runs**. The API project should use the current root `vercel.json` (**`functions` + `routes`**, **no `builds`**) and show **`vercel_build: ok`** in logs. If the install step uses **`pip`** / **`requirements.txt`** for the **API** project, Vercel is reading the **repository root**, not `mobile/vercel.json`.
+If the log says **`Due to builds existing in your configuration file, the Build and Development Settings… will not apply`**, an old **root** `vercel.json` with legacy **`builds`** may be in use — that pipeline often **skips `buildCommand`**, so Django **`migrate` never runs**. The API project should use the current root `vercel.json` (**`routes` + `buildCommand`**, **no `builds`**, **no `functions` pattern for `api/index.py`**) and show **`vercel_build: ok`** in logs. If the install step uses **`pip`** / **`requirements.txt`** for the **API** project, Vercel is reading the **repository root**, not `mobile/vercel.json`.
 
 **Fix:** In this Vercel project → **Settings → General → Root Directory**, set **`mobile`** (exactly), save, then **Redeploy**. A correct Expo build log should show **`npm install`** and **`npx expo export -p web`**, and output **`dist/`** with static assets—no Python venv.
 
