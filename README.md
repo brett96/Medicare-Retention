@@ -29,7 +29,7 @@ This repository is a **proof of concept** for a Medicare member retention tool b
 │   └── test_fhir_api.py          # Terminal PKCE + FHIR smoke test (Elevance / Cigna)
 ├── manage.py
 ├── requirements.txt
-├── vercel.json                   # Django API project only (@vercel/python + builds)
+├── vercel.json                   # Django API: functions + routes + buildCommand (no legacy `builds`)
 └── apiTest.py                    # Legacy one-off script (superseded by scripts/)
 ```
 
@@ -190,7 +190,7 @@ Allow **Python** through Windows Firewall if prompted. (This is separate from **
 
 ### Vercel (Django API project)
 
-- Repo **root** `vercel.json` uses **`builds`** (`@vercel/python`) + **`routes`** to `api/index.py` — do not add a **`functions`** block in the same file (Vercel forbids mixing both). Because **`builds`** is present, **Project Settings → Build Command** in the dashboard may be **ignored** for this project (see Vercel’s warning in build logs).
+- Repo **root** `vercel.json` uses **`functions`** (`api/index.py`) + **`routes`** to `api/index.py`, plus **`buildCommand`: `python vercel_build.py`**. **Do not reintroduce legacy `builds`:** it can skip `buildCommand`, so **`migrate` never runs** on deploy.
 - **Deploy checklist:** see **[DEPLOY_VERCEL.md](DEPLOY_VERCEL.md)** — env vars, Postgres + `migrate` on build, Elevance redirect URI, and troubleshooting.
 - **Template:** [`.env.example`](.env.example) lists variable names (no secrets).
 - Keep handlers **fast**: outbound HTTP uses short timeouts; no long-running tasks.
@@ -205,7 +205,7 @@ The **browser handoff** experience is a **separate static site** produced by **`
 
 | Project | Root in repo | Config file | Build | Output |
 |--------|----------------|------------|-------|--------|
-| **API (Django)** | Repository root (default) | Root `vercel.json` — Python **`builds`**, `api/index.py` | `pip` + `manage.py` (see `vercel.json`) | Serverless Python |
+| **API (Django)** | Repository root (default) | Root `vercel.json` — **`functions`** + `routes`, `vercel_build.py` | `pip` + `vercel_build.py` (collectstatic + migrate) | Serverless Python |
 | **Expo web (handoff UI)** | **`mobile`** | **`mobile/vercel.json`** — **no** `builds` | `npm install` + `npx expo export -p web` | Static **`dist/`** |
 
 Create **two** Vercel projects linked to the **same GitHub repo**: one for the API (root), one for Expo web (**Root Directory = `mobile`**). The Expo project must **not** use the root `vercel.json`; Vercel resolves config from the **root directory** you set.

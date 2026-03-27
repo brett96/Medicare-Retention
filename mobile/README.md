@@ -76,9 +76,9 @@ Then on the phone’s browser you can try `http://192.168.0.108:8000/` — you s
 
 That response is **`GET /` on the Django API**, not the Expo web app. The **Expo** deployment must be a **separate Vercel project** with **Root Directory = `mobile`**, build **`npx expo export -p web`**, output **`dist`**. If `APP_HANDOFF_URL_BASE` points at a hostname that still deploys the API from the repo root, you will never load the React handoff UI—only API JSON.
 
-### Vercel build logs show Python / `requirements.txt` / `builds` warning
+### Vercel build logs show Python / `requirements.txt` / dashboard warning
 
-If the log says **`Due to builds existing in your configuration file, the Build and Development Settings… will not apply`** and the install step uses **`pip`** / **`requirements.txt`**, Vercel is reading the **repository root** `vercel.json` (Django `@vercel/python` + `builds`), not `mobile/vercel.json`.
+If the log says **`Due to builds existing in your configuration file, the Build and Development Settings… will not apply`**, an old **root** `vercel.json` with legacy **`builds`** may be in use — that pipeline often **skips `buildCommand`**, so Django **`migrate` never runs**. The API project should use the current root `vercel.json` (**`functions` + `routes`**, **no `builds`**) and show **`vercel_build: ok`** in logs. If the install step uses **`pip`** / **`requirements.txt`** for the **API** project, Vercel is reading the **repository root**, not `mobile/vercel.json`.
 
 **Fix:** In this Vercel project → **Settings → General → Root Directory**, set **`mobile`** (exactly), save, then **Redeploy**. A correct Expo build log should show **`npm install`** and **`npx expo export -p web`**, and output **`dist/`** with static assets—no Python venv.
 
