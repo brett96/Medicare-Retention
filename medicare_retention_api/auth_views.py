@@ -1,0 +1,490 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import html
+import json
+import os
+import secrets
+import urllib.parse
+from datetime import timedelta
+from typing import Any, Dict, Optional, Tuple, Union
+
+import requests
+from cryptography.fernet import Fernet
+from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.shortcuts import redirect
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
+
+from gateway.models import PkceSession, TokenExchangeCode
+from medicare_retention_api.payers import PayerConfig, get_payer_config
+
+
+def _http_timeout() -> Union[float, Tuple[float, float]]:
+    legacy = _env("ELEVANCE_HTTP_TIMEOUT_S") or _env("FHIR_HTTP_TIMEOUT_S")
+    if legacy:
+        return float(legacy)
+    connect = float(_env("FHIR_HTTP_CONNECT_TIMEOUT_S", "20") or _env("ELEVANCE_HTTP_CONNECT_TIMEOUT_S", "20") or "20")
+    read = float(_env("FHIR_HTTP_READ_TIMEOUT_S", "90") or _env("ELEVANCE_HTTP_READ_TIMEOUT_S", "90") or "90")
+    return (connect, read)
+
+
+class ConfigError(RuntimeError):
+    pass
+
+
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    v = os.environ.get(name)
+    if v is None or v.strip() == "":
+        return default
+    return v.strip()
+
+
+def _require_env(name: str) -> str:
+    v = _env(name)
+    if not v:
+        raise ConfigError(f"Missing required env var: {name}")
+    return v
+
+
+def _pkce_pair() -> tuple[str, str]:
+    verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode("utf-8")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("utf-8")).digest()).rstrip(
+        b"="
+    ).decode("utf-8")
+    return verifier, challenge
+
+
+def _fernet() -> Fernet:
+    key = _require_env("TOKEN_ENCRYPTION_KEY").encode("utf-8")
+    try:
+        return Fernet(key)
+    except Exception as e:
+        raise ConfigError("TOKEN_ENCRYPTION_KEY is invalid for Fernet.") from e
+
+
+def _http_redirect(location: str) -> HttpResponse:
+    r = HttpResponse(status=302)
+    r["Location"] = location
+    return r
+
+
+def _html_handoff_to_app(deeplink: str) -> HttpResponse:
+    safe_href = html.escape(deeplink, quote=True)
+    js_url = json.dumps(deeplink)
+    body = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign-in complete</title></head><body>
+<p>Redirecting to the app…</p>
+<p>If nothing happens, <a href="{safe_href}">open the app</a>.</p>
+<script>window.location.replace({js_url});</script>
+</body></html>"""
+    return HttpResponse(body, content_type="text/html; charset=utf-8")
+
+
+def _exchange_authorization_code(cfg: PayerConfig, *, code: str, code_verifier: str) -> requests.Response:
+    token_payload: Dict[str, Any] = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": cfg.redirect_uri,
+        "client_id": cfg.client_id,
+        "code_verifier": code_verifier,
+    }
+    if cfg.client_secret:
+        token_payload["client_secret"] = cfg.client_secret
+
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    if cfg.client_secret:
+        return requests.post(
+            cfg.token_url,
+            data=token_payload,
+            auth=requests.auth.HTTPBasicAuth(cfg.client_id, cfg.client_secret),
+            headers=headers,
+            timeout=_http_timeout(),
+        )
+    return requests.post(cfg.token_url, data=token_payload, headers=headers, timeout=_http_timeout())
+
+
+def _patient_id_from_userinfo(data: Dict[str, Any]) -> Optional[str]:
+    p = data.get("patient")
+    if p is not None and str(p).strip():
+        return str(p).strip()
+    for key in ("fhirUser", "fhir_user"):
+        fu = data.get(key)
+        if isinstance(fu, str) and fu.strip():
+            s = fu.strip()
+            if "/" in s:
+                return s.rsplit("/", 1)[-1]
+            return s
+    sub = data.get("sub")
+    if sub is not None and str(sub).strip():
+        return str(sub).strip()
+    return None
+
+
+def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
+    if not cfg.requires_userinfo:
+        raw = token.get("patient") if token.get("patient") is not None else token.get("patient_id")
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        return s or None
+    if not cfg.userinfo_url:
+        return None
+    access = token.get("access_token")
+    if not access or not isinstance(access, str):
+        return None
+    try:
+        resp = requests.get(
+            cfg.userinfo_url,
+            headers={"Authorization": f"Bearer {access}", "Accept": "application/json"},
+            timeout=_http_timeout(),
+        )
+    except requests.RequestException:
+        return None
+    try:
+        body: Any = resp.json()
+    except ValueError:
+        return None
+    if resp.status_code != 200 or not isinstance(body, dict):
+        return None
+    return _patient_id_from_userinfo(body)
+
+
+def _handoff_payload(token: Dict[str, Any], cfg: PayerConfig) -> Dict[str, Any]:
+    patient_id = _discover_patient_id(token, cfg)
+    out: Dict[str, Any] = dict(token)
+    out["payer_id"] = cfg.payer_id
+    out["patient_id"] = patient_id
+    if patient_id:
+        out.setdefault("patient", patient_id)
+    return out
+
+
+def _normalize_fhir_resource_type(segment: str) -> str:
+    s = (segment or "").strip().lower()
+    aliases = {
+        "eob": "explanationofbenefit",
+        "explanation-of-benefit": "explanationofbenefit",
+    }
+    return aliases.get(s, s)
+
+
+def _fhir_resource_url(cfg: PayerConfig, resource_type: str, patient_id: str) -> str:
+    base = cfg.fhir_base_url.rstrip("/")
+    pid = urllib.parse.quote(patient_id)
+    rt = _normalize_fhir_resource_type(resource_type)
+    if rt == "patient":
+        if cfg.patient_lookup_mode == "id_search":
+            return f"{base}/Patient?_id={pid}"
+        return f"{base}/Patient/{pid}"
+    if rt == "coverage":
+        return f"{base}/Coverage?patient={pid}"
+    if rt == "encounter":
+        return f"{base}/Encounter?patient={pid}"
+    if rt == "explanationofbenefit":
+        return f"{base}/ExplanationOfBenefit?patient={pid}"
+    raise ValueError(f"Unsupported resource type: {resource_type!r}")
+
+
+@require_GET
+def oauth_authorize(request: HttpRequest, payer_id: str) -> HttpResponse:
+    try:
+        cfg = get_payer_config(payer_id)
+    except KeyError:
+        return JsonResponse({"error": "unknown_payer", "payer_id": payer_id}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": "payer_config_error", "detail": str(e)}, status=500)
+
+    verifier, challenge = _pkce_pair()
+    state = secrets.token_urlsafe(24)
+    now = timezone.now()
+    PkceSession.objects.create(
+        state=state,
+        payer_id=cfg.payer_id,
+        code_verifier=verifier,
+        expires_at=now + timedelta(minutes=10),
+    )
+
+    params = {
+        "response_type": "code",
+        "client_id": cfg.client_id,
+        "redirect_uri": cfg.redirect_uri,
+        "scope": cfg.scope,
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "aud": cfg.fhir_base_url,
+    }
+    url = f"{cfg.auth_url}?{urllib.parse.urlencode(params)}"
+    return redirect(url)
+
+
+@require_GET
+def oauth_callback(request: HttpRequest, payer_id: str) -> HttpResponse:
+    q = request.GET
+    code = q.get("code")
+    state = q.get("state")
+
+    try:
+        cfg = get_payer_config(payer_id)
+    except KeyError:
+        return JsonResponse({"error": "unknown_payer", "payer_id": payer_id}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": "payer_config_error", "detail": str(e)}, status=500)
+
+    if not code:
+        oauth_error = q.get("error")
+        err_desc = q.get("error_description")
+        status_hint = q.get("status_code")
+        if oauth_error or err_desc or status_hint is not None:
+            payload: Dict[str, Any] = {
+                "error": "oauth_provider_error",
+                "oauth_error": oauth_error,
+                "error_description": err_desc,
+                "state": state,
+            }
+            if q.get("error_uri"):
+                payload["error_uri"] = q.get("error_uri")
+            if status_hint is not None:
+                payload["status_code"] = status_hint
+            return JsonResponse(payload, status=400)
+
+    if not code or not state:
+        return JsonResponse({"error": "missing_code_or_state"}, status=400)
+
+    now = timezone.now()
+    try:
+        sess = PkceSession.objects.get(state=state)
+    except PkceSession.DoesNotExist:
+        return JsonResponse({"error": "state_not_found"}, status=400)
+
+    if sess.payer_id != cfg.payer_id:
+        return JsonResponse({"error": "payer_mismatch"}, status=400)
+
+    if sess.used_at is not None:
+        return JsonResponse({"error": "state_already_used"}, status=400)
+    if sess.expires_at <= now:
+        return JsonResponse({"error": "state_expired"}, status=400)
+
+    sess.used_at = now
+    sess.save(update_fields=["used_at"])
+
+    try:
+        resp = _exchange_authorization_code(cfg, code=code, code_verifier=sess.code_verifier)
+    except requests.RequestException as e:
+        return JsonResponse({"error": "token_request_failed", "detail": str(e)}, status=502)
+
+    try:
+        token: Any = resp.json()
+    except ValueError:
+        token = resp.text
+
+    if resp.status_code != 200 or not isinstance(token, dict) or "access_token" not in token:
+        return JsonResponse(
+            {"error": "token_exchange_failed", "status": resp.status_code, "response": token},
+            status=400,
+        )
+
+    handoff = _handoff_payload(token, cfg)
+
+    exchange_code = secrets.token_urlsafe(32)
+    f = _fernet()
+    token_bytes = json.dumps(handoff, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encrypted = f.encrypt(token_bytes)
+    TokenExchangeCode.objects.create(
+        code=exchange_code,
+        token_encrypted_b64=base64.b64encode(encrypted).decode("ascii"),
+        expires_at=now + timedelta(minutes=5),
+    )
+
+    handoff_base = _env("APP_HANDOFF_URL_BASE")
+    if handoff_base:
+        api_base = (_env("PUBLIC_API_BASE_URL") or request.build_absolute_uri("/")).rstrip("/")
+        sep = "&" if ("?" in handoff_base) else "?"
+        handoff_url = (
+            f"{handoff_base}{sep}code={urllib.parse.quote(exchange_code)}"
+            f"&api_base={urllib.parse.quote(api_base)}"
+        )
+        return _http_redirect(handoff_url)
+
+    deeplink_base = _require_env("APP_DEEPLINK_CALLBACK_BASE")
+    sep = "&" if ("?" in deeplink_base) else "?"
+    target = f"{deeplink_base}{sep}code={urllib.parse.quote(exchange_code)}"
+    if target.startswith("http://") or target.startswith("https://"):
+        return _http_redirect(target)
+    return _html_handoff_to_app(target)
+
+
+@require_GET
+def authorize_legacy(request: HttpRequest) -> HttpResponse:
+    return redirect("/api/auth/elevance/authorize/")
+
+
+@require_GET
+def callback_legacy(request: HttpRequest) -> HttpResponse:
+    return oauth_callback(request, "elevance")
+
+
+@csrf_exempt
+@require_POST
+def exchange_code(request: HttpRequest) -> HttpResponse:
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except ValueError:
+        return JsonResponse({"error": "invalid_json"}, status=400)
+
+    code = body.get("code")
+    if not code or not isinstance(code, str):
+        return JsonResponse({"error": "missing_code"}, status=400)
+
+    now = timezone.now()
+    try:
+        rec = TokenExchangeCode.objects.get(code=code)
+    except TokenExchangeCode.DoesNotExist:
+        return JsonResponse({"error": "code_not_found"}, status=404)
+
+    if rec.consumed_at is not None:
+        return JsonResponse({"error": "code_already_consumed"}, status=400)
+    if rec.expires_at <= now:
+        return JsonResponse({"error": "code_expired"}, status=400)
+
+    rec.consumed_at = now
+    rec.save(update_fields=["consumed_at"])
+
+    try:
+        encrypted = base64.b64decode(rec.token_encrypted_b64.encode("ascii"))
+        token_bytes = _fernet().decrypt(encrypted)
+        payload: Any = json.loads(token_bytes.decode("utf-8"))
+    except Exception as e:
+        return JsonResponse({"error": "decrypt_failed", "detail": str(e)}, status=500)
+
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "token_payload_invalid"}, status=500)
+
+    return JsonResponse(payload, status=200)
+
+
+@require_GET
+def oauth_debug_config(request: HttpRequest) -> HttpResponse:
+    if _env("OAUTH_DEBUG", "0") != "1":
+        return JsonResponse({"error": "not_found"}, status=404)
+    payer_id = (request.GET.get("payer") or request.GET.get("payer_id") or "elevance").strip().lower()
+    try:
+        cfg = get_payer_config(payer_id)
+    except KeyError:
+        return JsonResponse({"error": "unknown_payer", "payer_id": payer_id}, status=404)
+    except Exception as e:
+        return JsonResponse({"error": "payer_config_error", "detail": str(e)}, status=500)
+    return JsonResponse(
+        {
+            "payer_id": cfg.payer_id,
+            "redirect_uri": cfg.redirect_uri,
+            "authorize_url": cfg.auth_url,
+            "client_id": cfg.client_id,
+            "requires_userinfo": cfg.requires_userinfo,
+            "hint": "Register redirect_uri EXACTLY in the payer developer portal (scheme, host, path, trailing slash).",
+        }
+    )
+
+
+def _bearer_token(request: HttpRequest) -> Optional[str]:
+    auth = request.headers.get("Authorization") or ""
+    if not auth.startswith("Bearer "):
+        return None
+    return auth[len("Bearer ") :].strip() or None
+
+
+def _fhir_get_json(request: HttpRequest, url: str) -> HttpResponse:
+    token = _bearer_token(request)
+    if not token:
+        return JsonResponse({"error": "missing_bearer_token"}, status=401)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/fhir+json"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=_http_timeout())
+    except requests.RequestException as e:
+        return JsonResponse({"error": "fhir_request_failed", "detail": str(e)}, status=502)
+
+    try:
+        data: Any = resp.json()
+    except ValueError:
+        data = resp.text
+
+    if resp.status_code != 200:
+        return JsonResponse(
+            {"error": "fhir_error", "status": resp.status_code, "response": data},
+            status=resp.status_code,
+        )
+
+    return JsonResponse(data, status=200, safe=isinstance(data, dict))
+
+
+@require_http_methods(["GET"])
+def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpResponse:
+    try:
+        cfg = get_payer_config(payer_id)
+    except KeyError:
+        return JsonResponse({"error": "unknown_payer", "payer_id": payer_id}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": "payer_config_error", "detail": str(e)}, status=500)
+
+    patient_id = request.GET.get("patient_id") or request.GET.get("patient")
+    if not patient_id:
+        return JsonResponse({"error": "missing_patient_id"}, status=400)
+
+    try:
+        url = _fhir_resource_url(cfg, resource_type, patient_id)
+    except ValueError as e:
+        return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
+
+    return _fhir_get_json(request, url)
+
+
+@require_http_methods(["GET"])
+def proxy_patient(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "patient")
+
+
+@require_http_methods(["GET"])
+def proxy_coverage(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "coverage")
+
+
+@require_http_methods(["GET"])
+def proxy_encounter(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "encounter")
+
+
+@require_http_methods(["GET"])
+def proxy_eob(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "explanationofbenefit")
+
+
+@require_http_methods(["GET"])
+def proxy_dailymed(request: HttpRequest) -> HttpResponse:
+    name = request.GET.get("name")
+    if not name:
+        return JsonResponse({"error": "missing_name"}, status=400)
+
+    url = "https://dailymed.nlm.nih.gov/dailymed/services/v2/drugnames.json"
+    params = {"drug_name": name}
+    try:
+        resp = requests.get(url, params=params, timeout=_http_timeout())
+    except requests.RequestException as e:
+        return JsonResponse({"error": "dailymed_request_failed", "detail": str(e)}, status=502)
+
+    try:
+        data: Any = resp.json()
+    except ValueError:
+        data = resp.text
+
+    if resp.status_code != 200:
+        return JsonResponse(
+            {"error": "dailymed_error", "status": resp.status_code, "response": data},
+            status=resp.status_code,
+        )
+
+    return JsonResponse(data, status=200, safe=isinstance(data, dict))
