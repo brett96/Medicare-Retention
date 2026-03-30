@@ -31,7 +31,7 @@ def root(request):
             "message": "Django API gateway is running.",
             "endpoints": {
                 "health": "/health/",
-                "authorize_legacy": "/authorize/ → Elevance multi-payer entry",
+                "authorize_legacy": "/authorize/ → HTML picker → /api/auth/<payer_id>/authorize/",
                 "oauth_authorize": "/api/auth/<payer_id>/authorize/",
                 "oauth_callback": "/api/auth/<payer_id>/callback/",
                 "callback_legacy": "/callback/ → Elevance (backward compatible)",

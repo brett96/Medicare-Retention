@@ -7,7 +7,7 @@ import {
   formatFhirHumanName,
   formatFhirTelecom,
   parseJwtPayload,
-  stringifyLimited,
+  stringifyJson,
   summarizeCoverageLines,
   summarizeEobBlocks,
   summarizeEncounterLines,
@@ -148,27 +148,33 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         const pid = encodeURIComponent(patientId);
         const token = tokenJson.access_token as string;
         const payerSeg = encodeURIComponent(payerId);
-
-        const [pat, cov, enc, eob] = await Promise.all([
-          fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/patient/?patient_id=${pid}`, token),
-          fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/coverage/?patient_id=${pid}`, token),
-          fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/encounter/?patient_id=${pid}`, token),
-          fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/eob/?patient_id=${pid}`, token),
-        ]);
+        const q = `?patient_id=${pid}`;
 
         const errs: Record<string, string> = {};
 
+        setStatus("Loading Patient…");
+        const pat = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Patient/${q}`, token);
         if (pat.ok) setPatientResource(pat.data);
         else errs.patient = summarizeFhirError(pat);
 
+        setStatus("Loading Coverage…");
+        const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${q}`, token);
         if (cov.ok) setCoverageBundle(cov.data);
         else errs.coverage = summarizeFhirError(cov);
 
-        if (enc.ok) setEncounterBundle(enc.data);
-        else errs.encounter = summarizeFhirError(enc);
-
+        setStatus("Loading Explanation of Benefit…");
+        const eob = await fetchFhirJson(
+          apiBase,
+          `/api/fhir/${payerSeg}/ExplanationOfBenefit/${q}`,
+          token
+        );
         if (eob.ok) setEobBundle(eob.data);
         else errs.eob = summarizeFhirError(eob);
+
+        setStatus("Loading Encounters…");
+        const enc = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Encounter/${q}`, token);
+        if (enc.ok) setEncounterBundle(enc.data);
+        else errs.encounter = summarizeFhirError(enc);
 
         if (Object.keys(errs).length) setResourceErrors(errs);
         setStatus("Done.");
@@ -443,33 +449,33 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
               {idTokenClaims ? (
                 <View style={{ marginBottom: 12 }}>
                   <Text style={{ fontWeight: "600", marginBottom: 4 }}>ID token claims</Text>
-                  <Text style={{ fontFamily: mono, fontSize: 10 }}>{stringifyLimited(idTokenClaims, 6000)}</Text>
+                  <Text style={{ fontFamily: mono, fontSize: 10 }}>{stringifyJson(idTokenClaims)}</Text>
                 </View>
               ) : null}
 
-              <Text style={{ fontWeight: "700", marginBottom: 6 }}>Raw FHIR JSON (truncated)</Text>
+              <Text style={{ fontWeight: "700", marginBottom: 6 }}>Raw FHIR JSON</Text>
               {patientResource ? (
                 <Text style={{ fontFamily: mono, fontSize: 10, marginBottom: 10 }}>
                   Patient{"\n"}
-                  {stringifyLimited(patientResource, 8000)}
+                  {stringifyJson(patientResource)}
                 </Text>
               ) : null}
               {coverageBundle ? (
                 <Text style={{ fontFamily: mono, fontSize: 10, marginBottom: 10 }}>
                   Coverage{"\n"}
-                  {stringifyLimited(coverageBundle, 8000)}
+                  {stringifyJson(coverageBundle)}
                 </Text>
               ) : null}
               {encounterBundle ? (
                 <Text style={{ fontFamily: mono, fontSize: 10, marginBottom: 10 }}>
                   Encounter{"\n"}
-                  {stringifyLimited(encounterBundle, 8000)}
+                  {stringifyJson(encounterBundle)}
                 </Text>
               ) : null}
               {eobBundle ? (
                 <Text style={{ fontFamily: mono, fontSize: 10 }}>
                   EOB{"\n"}
-                  {stringifyLimited(eobBundle, 8000)}
+                  {stringifyJson(eobBundle)}
                 </Text>
               ) : null}
             </View>
@@ -494,7 +500,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
 function summarizeFhirError(result: FhirFetchResult): string {
   const d = result.data as any;
   if (d?.error === "fhir_error" && d?.response) {
-    return `HTTP ${result.status}: ${stringifyLimited(d.response, 400)}`;
+    return `HTTP ${result.status}: ${stringifyJson(d.response)}`;
   }
   if (d?.error) return String(d.error);
   return `HTTP ${result.status}`;

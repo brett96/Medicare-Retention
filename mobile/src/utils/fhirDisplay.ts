@@ -52,14 +52,20 @@ export function bundleEntryCount(bundle: unknown): number {
   return Array.isArray(b?.entry) ? b.entry.length : 0;
 }
 
-export function stringifyLimited(obj: unknown, maxChars = 12000): string {
+/** Pretty-print JSON with no length cap (use in debug / technical views). */
+export function stringifyJson(obj: unknown): string {
   try {
-    const s = JSON.stringify(obj, null, 2);
-    if (s.length <= maxChars) return s;
-    return `${s.slice(0, maxChars)}\n\n… truncated (${s.length} chars total)`;
+    return JSON.stringify(obj, null, 2);
   } catch {
     return String(obj);
   }
+}
+
+/** Pretty-print JSON, optionally truncating for compact previews. */
+export function stringifyLimited(obj: unknown, maxChars = 12000): string {
+  const s = stringifyJson(obj);
+  if (s.length <= maxChars) return s;
+  return `${s.slice(0, maxChars)}\n\n… truncated (${s.length} chars total)`;
 }
 
 function codingDisplay(c: { coding?: Array<{ display?: string; code?: string; system?: string }> }): string {

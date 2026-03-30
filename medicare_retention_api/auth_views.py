@@ -19,7 +19,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from gateway.models import PkceSession, TokenExchangeCode
-from medicare_retention_api.payers import PayerConfig, get_payer_config
+from medicare_retention_api.payers import PayerConfig, get_payer_config, list_configured_payers
 
 
 def _http_timeout() -> Union[float, Tuple[float, float]]:
@@ -69,6 +69,63 @@ def _http_redirect(location: str) -> HttpResponse:
     r = HttpResponse(status=302)
     r["Location"] = location
     return r
+
+
+def _html_authorize_picker(request: HttpRequest) -> HttpResponse:
+    """Browser landing at /authorize: choose payer, then GET /api/auth/<id>/authorize/."""
+    payers = list_configured_payers()
+    rows: list[str] = []
+    for pid, label in payers:
+        path = f"/api/auth/{urllib.parse.quote(pid)}/authorize/"
+        href = request.build_absolute_uri(path)
+        safe_label = html.escape(label)
+        payer_class = " btn-cigna" if pid == "cigna" else ""
+        rows.append(
+            f'<li><a class="btn{payer_class}" href="{html.escape(href, quote=True)}">{safe_label}</a></li>'
+        )
+    if not rows:
+        list_html = (
+            "<p class=\"muted\">No payers are fully configured yet. "
+            "Set the environment variables for at least one payer (see <code>payers.py</code> / deployment docs).</p>"
+        )
+    else:
+        list_html = "<ul class=\"payers\">\n" + "\n".join(rows) + "\n</ul>"
+
+    body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — choose payer</title>
+  <style>
+    :root {{ font-family: system-ui, Segoe UI, Roboto, sans-serif; }}
+    body {{ margin: 0; padding: 2rem; background: #f4f6f8; color: #111; }}
+    main {{ max-width: 28rem; margin: 0 auto; background: #fff; border-radius: 12px;
+            padding: 1.75rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
+    h1 {{ font-size: 1.35rem; margin: 0 0 0.5rem; }}
+    p.lead {{ margin: 0 0 1.25rem; color: #555; font-size: 0.95rem; line-height: 1.45; }}
+    ul.payers {{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.65rem; }}
+    a.btn {{
+      display: block; text-align: center; text-decoration: none;
+      padding: 0.85rem 1rem; border-radius: 10px; background: #111; color: #fff;
+      font-weight: 600; font-size: 1rem;
+    }}
+    a.btn:hover {{ background: #333; }}
+    a.btn.btn-cigna {{ background: #0a6a92; }}
+    a.btn.btn-cigna:hover {{ background: #084a6b; }}
+    p.muted {{ color: #666; font-size: 0.9rem; line-height: 1.5; }}
+    code {{ font-size: 0.85em; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Sign in</h1>
+    <p class="lead">Choose your health plan to continue with SMART on FHIR (OAuth).</p>
+    {list_html}
+  </main>
+</body>
+</html>"""
+    return HttpResponse(body, content_type="text/html; charset=utf-8")
 
 
 def _html_handoff_to_app(deeplink: str) -> HttpResponse:
@@ -321,7 +378,7 @@ def oauth_callback(request: HttpRequest, payer_id: str) -> HttpResponse:
 
 @require_GET
 def authorize_legacy(request: HttpRequest) -> HttpResponse:
-    return redirect("/api/auth/elevance/authorize/")
+    return _html_authorize_picker(request)
 
 
 @require_GET
