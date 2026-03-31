@@ -97,17 +97,22 @@ def load_elevance_config() -> PayerTestConfig:
 
 
 def load_cigna_config() -> PayerTestConfig:
+    # Match medicare_retention_api/payers.py sandbox defaults when URLs omitted.
+    default_auth = "https://r-hi2.cigna.com/mga/sps/oauth/oauth20/authorize"
+    default_token = "https://r-hi2.cigna.com/mga/sps/oauth/oauth20/token"
+    default_fhir = "https://p-hi2.digitaledge.cigna.com/ConsumerAccess/v1-devportal"
+    default_userinfo = "https://r-hi2.cigna.com/mga/sps/oauth/oauth20/userinfo"
     return PayerTestConfig(
         payer_id="cigna",
         client_id=_require("CIGNA_CLIENT_ID"),
         client_secret=_env("CIGNA_CLIENT_SECRET"),
         redirect_uri=_require("CIGNA_REDIRECT_URI"),
-        auth_url=_require("CIGNA_AUTH_URL"),
-        token_url=_require("CIGNA_TOKEN_URL"),
-        fhir_base_url=_require("CIGNA_FHIR_BASE_URL"),
+        auth_url=_env("CIGNA_AUTH_URL", default_auth) or default_auth,
+        token_url=_env("CIGNA_TOKEN_URL", default_token) or default_token,
+        fhir_base_url=_env("CIGNA_FHIR_BASE_URL", default_fhir) or default_fhir,
         scope=_env("CIGNA_SCOPE", DEFAULT_SCOPE) or DEFAULT_SCOPE,
         requires_userinfo=True,
-        userinfo_url=_require("CIGNA_USERINFO_URL"),
+        userinfo_url=_env("CIGNA_USERINFO_URL", default_userinfo) or default_userinfo,
     )
 
 
@@ -339,7 +344,7 @@ def main() -> int:
                 """
                 Set payer-specific variables in .env (see .env.example):
                   Elevance: ELEVANCE_CLIENT_ID, ELEVANCE_REDIRECT_URI, ELEVANCE_AUTH_URL, ...
-                  Cigna: CIGNA_CLIENT_ID, CIGNA_REDIRECT_URI, CIGNA_USERINFO_URL, ...
+                  Cigna: CIGNA_CLIENT_ID, CIGNA_REDIRECT_URI (optional URL overrides: CIGNA_AUTH_URL, …)
                 """
             ).strip(),
             file=sys.stderr,

@@ -383,6 +383,16 @@ def authorize_legacy(request: HttpRequest) -> HttpResponse:
 
 @require_GET
 def callback_legacy(request: HttpRequest) -> HttpResponse:
+    # Back-compat: older redirect URIs point at /callback/ (no payer_id in path).
+    # Dispatch based on the stored state -> payer_id to avoid "payer_mismatch"
+    # when multiple payers share the same legacy callback URL.
+    state = request.GET.get("state")
+    if state:
+        try:
+            sess = PkceSession.objects.get(state=state)
+            return oauth_callback(request, sess.payer_id)
+        except PkceSession.DoesNotExist:
+            pass
     return oauth_callback(request, "elevance")
 
 
