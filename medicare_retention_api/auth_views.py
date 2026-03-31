@@ -465,6 +465,36 @@ def _bearer_token(request: HttpRequest) -> Optional[str]:
     return auth[len("Bearer ") :].strip() or None
 
 
+def _unwrap_patient_bundle(data: Any) -> Any:
+    """
+    Some payers (e.g. Cigna) return a search Bundle for Patient lookups (Patient?_id=...).
+    The UI's patient summary expects a single Patient resource; prefer a gov-* Patient when present
+    because downstream resources (EOB/Coverage/Encounter) commonly reference that id.
+    """
+    if not isinstance(data, dict) or data.get("resourceType") != "Bundle":
+        return data
+    entries = data.get("entry")
+    if not isinstance(entries, list) or not entries:
+        return data
+
+    patients: list[dict[str, Any]] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        r = e.get("resource")
+        if isinstance(r, dict) and r.get("resourceType") == "Patient":
+            patients.append(r)
+
+    if not patients:
+        return data
+
+    for p in patients:
+        pid = p.get("id")
+        if isinstance(pid, str) and pid.startswith("gov-"):
+            return p
+    return patients[0]
+
+
 def _fhir_get_json(request: HttpRequest, url: str) -> HttpResponse:
     token = _bearer_token(request)
     if not token:
@@ -507,7 +537,16 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
     except ValueError as e:
         return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
 
-    return _fhir_get_json(request, url)
+    resp = _fhir_get_json(request, url)
+    # If we got a successful response, unwrap Patient Bundles for better UI compatibility.
+    if _normalize_fhir_resource_type(resource_type) == "patient" and resp.status_code == 200:
+        try:
+            payload: Any = json.loads(resp.content.decode("utf-8"))
+        except Exception:
+            return resp
+        payload = _unwrap_patient_bundle(payload)
+        return JsonResponse(payload, status=200, safe=isinstance(payload, dict))
+    return resp
 
 
 @require_http_methods(["GET"])
