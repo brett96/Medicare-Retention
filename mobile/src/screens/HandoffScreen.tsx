@@ -41,6 +41,24 @@ function compartmentPatientQueryParam(
   return encodeURIComponent(tokenPatientId);
 }
 
+/** Cigna pharmacy EOB (CARIN-BB) / Rx may index only on token member id (e.g. A000…); proxy merges when ids differ. */
+function cignaRxMergeSuffix(
+  payerId: string,
+  tokenPatientId: string,
+  compartmentQuery: string
+): string {
+  if (payerId !== "cigna" || !tokenPatientId.trim()) return "";
+  const m = compartmentQuery.match(/patient_id=([^&]+)/);
+  const enc = m?.[1];
+  if (!enc) return "";
+  try {
+    if (decodeURIComponent(enc) === tokenPatientId.trim()) return "";
+  } catch {
+    return "";
+  }
+  return `&merge_patient_id=${encodeURIComponent(tokenPatientId.trim())}`;
+}
+
 async function fetchFhirJson(
   apiBase: string,
   path: string,
@@ -185,6 +203,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         else errs.patient = summarizeFhirError(pat);
 
         const compartmentQ = `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
+        const cignaRxMerge = cignaRxMergeSuffix(payerId, patientId, compartmentQ);
 
         setStatus("Loading Coverage…");
         const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${compartmentQ}`, token);
@@ -194,7 +213,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         setStatus("Loading Explanation of Benefit…");
         const eob = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/ExplanationOfBenefit/${compartmentQ}`,
+          `/api/fhir/${payerSeg}/ExplanationOfBenefit/${compartmentQ}${cignaRxMerge}`,
           token
         );
         if (eob.ok) setEobBundle(eob.data);
@@ -208,7 +227,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         setStatus("Loading MedicationRequest (prescriptions)…");
         const mr = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/MedicationRequest/${compartmentQ}`,
+          `/api/fhir/${payerSeg}/MedicationRequest/${compartmentQ}${cignaRxMerge}`,
           token
         );
         if (mr.ok) setMedicationRequestBundle(mr.data);
