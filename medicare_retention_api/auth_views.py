@@ -494,77 +494,11 @@ def _fhir_follow_bundle_next_pages(
     return merged
 
 
-def _fhir_should_follow_bundle_next(resource_type: str, *, payer_id: Optional[str] = None) -> bool:
+def _fhir_should_follow_bundle_next(resource_type: str) -> bool:
     if _env("FHIR_PROXY_FOLLOW_BUNDLE_NEXT", "1") != "1":
         return False
     rt = _normalize_fhir_resource_type(resource_type)
-    if rt != "patient":
-        return True
-    # Cigna Patient?_id=… may put linked identities (gov- vs esi-) on later Bundle pages.
-    if (payer_id or "").strip().lower() == "cigna" and _env("CIGNA_PATIENT_BUNDLE_PAGINATION", "1") == "1":
-        return True
-    return False
-
-
-def _bundle_entry_dedupe_key(entry: Any) -> Optional[str]:
-    if not isinstance(entry, dict):
-        return None
-    r = entry.get("resource")
-    if isinstance(r, dict):
-        rid, rt = r.get("id"), r.get("resourceType")
-        if isinstance(rid, str) and rid.strip() and isinstance(rt, str) and rt.strip():
-            return f"{rt.strip()}/{rid.strip()}"
-    fu = entry.get("fullUrl")
-    if isinstance(fu, str) and fu.strip():
-        return fu.strip()
-    return None
-
-
-def _fhir_merge_cigna_dual_patient_bundles(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
-    """
-    Cigna may return pharmacy EOB (CARIN-BB pharmacy profile) and some Rx data only when
-    searching by the token/member id (e.g. A000...), while other compartment reads need
-    Patient.id (gov-*/esi-*). Merge entries; dedupe by resource type+id or fullUrl.
-    """
-    out = dict(primary)
-    e1 = primary.get("entry") if isinstance(primary.get("entry"), list) else []
-    e2 = secondary.get("entry") if isinstance(secondary.get("entry"), list) else []
-    seen: set[str] = set()
-    merged_list: list[Any] = []
-    for e in e1:
-        k = _bundle_entry_dedupe_key(e)
-        if k:
-            seen.add(k)
-        merged_list.append(e)
-    for e in e2:
-        k = _bundle_entry_dedupe_key(e)
-        if k and k in seen:
-            continue
-        if k:
-            seen.add(k)
-        merged_list.append(e)
-    out["entry"] = merged_list
-    out["total"] = len(merged_list)
-    links_out: list[dict[str, Any]] = []
-    for item in primary.get("link") or []:
-        if isinstance(item, dict) and (item.get("relation") or "").strip().lower() != "next":
-            links_out.append(item)
-    out["link"] = links_out
-    meta = out.get("meta")
-    if not isinstance(meta, dict):
-        meta = {}
-        out["meta"] = meta
-    tlist = meta.get("tag")
-    tags = list(tlist) if isinstance(tlist, list) else []
-    tags.append(
-        {
-            "system": "https://medicare-retention.local/fhir-proxy",
-            "code": "cigna-dual-patient-merge",
-            "display": "Merged ExplanationOfBenefit or MedicationRequest for Cigna FHIR patient id and token member id.",
-        }
-    )
-    meta["tag"] = tags
-    return out
+    return rt != "patient"
 
 
 @require_GET
@@ -875,225 +809,7 @@ def _unwrap_patient_bundle(data: Any) -> Any:
         pid = p.get("id")
         if isinstance(pid, str) and pid.startswith("gov-"):
             return p
-    for p in patients:
-        pid = p.get("id")
-        if isinstance(pid, str) and pid.startswith("esi-"):
-            return p
     return patients[0]
-
-
-def _cigna_collect_patient_ids_from_patient_search(
-    cfg: PayerConfig,
-    patient_id: str,
-    *,
-    headers: dict[str, str],
-    timeout: Union[float, Tuple[float, float]],
-    with_search_extras: bool,
-) -> list[str]:
-    """Return distinct Patient.id values from Patient?_id=… (all Bundle pages when pagination is on)."""
-    pid0 = patient_id.strip()
-    try:
-        url = _fhir_resource_url(cfg, "patient", patient_id, with_search_extras=with_search_extras)
-    except ValueError:
-        return [pid0]
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout)
-    except requests.RequestException:
-        return [pid0]
-    if resp.status_code != 200:
-        return [pid0]
-    try:
-        body: Any = resp.json()
-    except ValueError:
-        return [pid0]
-    if isinstance(body, dict) and body.get("resourceType") == "Patient":
-        rid = body.get("id")
-        if isinstance(rid, str) and rid.strip():
-            return [rid.strip()]
-        return [pid0]
-    if not isinstance(body, dict) or body.get("resourceType") != "Bundle":
-        return [pid0]
-    if _env("CIGNA_PATIENT_BUNDLE_PAGINATION", "1") == "1":
-        body = _fhir_follow_bundle_next_pages(cfg, body, headers=headers, timeout=timeout)
-    ids: list[str] = []
-    for e in body.get("entry") or []:
-        if not isinstance(e, dict):
-            continue
-        r = e.get("resource")
-        if isinstance(r, dict) and r.get("resourceType") == "Patient":
-            rid = r.get("id")
-            if isinstance(rid, str) and rid.strip():
-                ids.append(rid.strip())
-    seen: set[str] = set()
-    out: list[str] = []
-    for i in ids:
-        if i not in seen:
-            seen.add(i)
-            out.append(i)
-    if pid0 not in seen:
-        out.insert(0, pid0)
-    return out if out else [pid0]
-
-
-def _cigna_linked_patient_ids_cached(
-    request: HttpRequest,
-    cfg: PayerConfig,
-    primary_patient_id: str,
-    *,
-    headers: dict[str, str],
-    timeout: Union[float, Tuple[float, float]],
-    with_search_extras: bool,
-) -> list[str]:
-    cache: dict[tuple[str, bool], list[str]] = getattr(request, "_cigna_patient_link_ids", None) or {}
-    setattr(request, "_cigna_patient_link_ids", cache)
-    key = (primary_patient_id.strip(), with_search_extras)
-    if key not in cache:
-        cache[key] = _cigna_collect_patient_ids_from_patient_search(
-            cfg,
-            primary_patient_id,
-            headers=headers,
-            timeout=timeout,
-            with_search_extras=with_search_extras,
-        )
-    return cache[key]
-
-
-def _cigna_apply_multi_patient_compartment_merge(
-    request: HttpRequest,
-    cfg: PayerConfig,
-    resource_type: str,
-    primary_patient_id: str,
-    payload: dict[str, Any],
-    headers: dict[str, str],
-    timeout: Union[float, Tuple[float, float]],
-    *,
-    with_search_extras: bool,
-    follow_bundle_next: bool,
-) -> dict[str, Any]:
-    """
-    Merge ExplanationOfBenefit / MedicationRequest Bundles for every linked Cigna Patient id
-    (gov- / esi- / token) discovered from the Patient search Bundle, plus optional query merge ids.
-    """
-    if _env("CIGNA_DUAL_PATIENT_MERGE", "1") != "1":
-        return payload
-    rt = _normalize_fhir_resource_type(resource_type)
-    if rt not in ("explanationofbenefit", "medicationrequest"):
-        return payload
-    if not isinstance(payload, dict) or payload.get("resourceType") != "Bundle":
-        return payload
-
-    extra_raw = (request.GET.get("merge_patient_id") or request.GET.get("cigna_merge_patient_id") or "").strip()
-    extra_ids = [p.strip() for p in extra_raw.split(",") if p.strip()]
-
-    if _env("CIGNA_AUTO_MERGE_PATIENT_IDS", "1") == "1":
-        linked = list(
-            _cigna_linked_patient_ids_cached(
-                request,
-                cfg,
-                primary_patient_id,
-                headers=headers,
-                timeout=timeout,
-                with_search_extras=with_search_extras,
-            )
-        )
-        for p in extra_ids:
-            if p not in linked:
-                linked.append(p)
-    else:
-        linked = [primary_patient_id.strip()]
-        for p in extra_ids:
-            if p not in linked:
-                linked.append(p)
-
-    primary = primary_patient_id.strip()
-    others = [x for x in linked if x != primary]
-    out: dict[str, Any] = payload
-    for oid in others:
-        try:
-            url_o = _fhir_resource_url(cfg, resource_type, oid, with_search_extras=with_search_extras)
-        except ValueError:
-            continue
-        try:
-            r_o = requests.get(url_o, headers=headers, timeout=timeout)
-        except requests.RequestException:
-            continue
-        if r_o.status_code != 200:
-            continue
-        try:
-            b_o: Any = r_o.json()
-        except ValueError:
-            continue
-        if not isinstance(b_o, dict) or b_o.get("resourceType") != "Bundle":
-            continue
-        if follow_bundle_next and _fhir_should_follow_bundle_next(resource_type, payer_id=cfg.payer_id):
-            b_o = _fhir_follow_bundle_next_pages(cfg, b_o, headers=headers, timeout=timeout)
-        out = _fhir_merge_cigna_dual_patient_bundles(out, b_o)
-    return out
-
-
-def _proxy_fhir_cigna_legacy(
-    request: HttpRequest, cfg: PayerConfig, resource_type: str, patient_id: str
-) -> HttpResponse:
-    """
-    Match older Cigna integration: single GET, no &_count, no Bundle pagination merge,
-    no dual-patient merge. Types in cfg.fhir_unsupported_resources return an empty Bundle (200)
-    so Cigna is not called for resources it rejects with not-supported. Patient: unwrap Bundle (gov-*).
-    """
-    rt = _normalize_fhir_resource_type(resource_type)
-    if rt in cfg.fhir_unsupported_resources:
-        return JsonResponse(_empty_fhir_search_bundle(), status=200)
-    try:
-        url = _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
-    except ValueError as e:
-        return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
-
-    resp = _fhir_get_json(request, url)
-    if rt == "patient" and resp.status_code == 200:
-        try:
-            payload: Any = json.loads(resp.content.decode("utf-8"))
-        except Exception:
-            return resp
-        if (
-            isinstance(payload, dict)
-            and payload.get("resourceType") == "Bundle"
-            and _env("CIGNA_PATIENT_BUNDLE_PAGINATION", "1") == "1"
-        ):
-            tok = _bearer_token(request)
-            if tok:
-                hdrs = {"Authorization": f"Bearer {tok}", "Accept": "application/fhir+json"}
-                payload = _fhir_follow_bundle_next_pages(cfg, payload, headers=hdrs, timeout=_http_timeout())
-        payload = _unwrap_patient_bundle(payload)
-        return JsonResponse(payload, status=200, safe=isinstance(payload, dict))
-    if (
-        rt in ("explanationofbenefit", "medicationrequest")
-        and resp.status_code == 200
-        and _env("CIGNA_DUAL_PATIENT_MERGE", "1") == "1"
-    ):
-        try:
-            merged_body: Any = json.loads(resp.content.decode("utf-8"))
-        except Exception:
-            return resp
-        if isinstance(merged_body, dict) and merged_body.get("resourceType") == "Bundle":
-            tok = _bearer_token(request)
-            if tok:
-                hdrs = {"Authorization": f"Bearer {tok}", "Accept": "application/fhir+json"}
-                timeout = _http_timeout()
-                follow = _env("FHIR_PROXY_FOLLOW_BUNDLE_NEXT", "1") == "1"
-                if follow:
-                    merged_body = _fhir_follow_bundle_next_pages(cfg, merged_body, headers=hdrs, timeout=timeout)
-                merged_body = _cigna_apply_multi_patient_compartment_merge(
-                    request,
-                    cfg,
-                    resource_type,
-                    patient_id,
-                    merged_body,
-                    hdrs,
-                    timeout,
-                    with_search_extras=False,
-                    follow_bundle_next=follow,
-                )
-                return JsonResponse(merged_body, status=200, safe=True)
-    return resp
 
 
 def _fhir_get_json(request: HttpRequest, url: str) -> HttpResponse:
@@ -1120,6 +836,27 @@ def _fhir_get_json(request: HttpRequest, url: str) -> HttpResponse:
     return JsonResponse(data, status=200, safe=isinstance(data, dict))
 
 
+def _proxy_fhir_cigna(request: HttpRequest, cfg: PayerConfig, resource_type: str, patient_id: str) -> HttpResponse:
+    """
+    Cigna FHIR proxy aligned with commit af603924: single GET (no &_count), no Bundle pagination merge,
+    no dual-patient / pharmacy merges. On success, Patient responses unwrapped from search Bundle (prefer gov-*).
+    """
+    try:
+        url = _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
+    except ValueError as e:
+        return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
+
+    resp = _fhir_get_json(request, url)
+    if _normalize_fhir_resource_type(resource_type) == "patient" and resp.status_code == 200:
+        try:
+            payload: Any = json.loads(resp.content.decode("utf-8"))
+        except Exception:
+            return resp
+        payload = _unwrap_patient_bundle(payload)
+        return JsonResponse(payload, status=200, safe=isinstance(payload, dict))
+    return resp
+
+
 @require_http_methods(["GET"])
 def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpResponse:
     try:
@@ -1133,8 +870,8 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
     if not patient_id:
         return JsonResponse({"error": "missing_patient_id"}, status=400)
 
-    if cfg.payer_id == "cigna" and _env("CIGNA_LEGACY_FHIR_PROXY", "0") == "1":
-        return _proxy_fhir_cigna_legacy(request, cfg, resource_type, patient_id)
+    if cfg.payer_id == "cigna":
+        return _proxy_fhir_cigna(request, cfg, resource_type, patient_id)
 
     try:
         url = _fhir_resource_url(cfg, resource_type, patient_id)
@@ -1173,27 +910,9 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
         isinstance(payload, dict)
         and payload.get("resourceType") == "Bundle"
         and hdrs
-        and _fhir_should_follow_bundle_next(resource_type, payer_id=cfg.payer_id)
+        and _fhir_should_follow_bundle_next(resource_type)
     ):
         payload = _fhir_follow_bundle_next_pages(cfg, payload, headers=hdrs, timeout=_http_timeout())
-
-    if (
-        cfg.payer_id == "cigna"
-        and hdrs
-        and isinstance(payload, dict)
-        and payload.get("resourceType") == "Bundle"
-    ):
-        payload = _cigna_apply_multi_patient_compartment_merge(
-            request,
-            cfg,
-            resource_type,
-            patient_id,
-            payload,
-            hdrs,
-            _http_timeout(),
-            with_search_extras=True,
-            follow_bundle_next=_fhir_should_follow_bundle_next(resource_type, payer_id=cfg.payer_id),
-        )
 
     if rt == "patient":
         payload = _unwrap_patient_bundle(payload)

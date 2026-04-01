@@ -41,19 +41,6 @@ function compartmentPatientQueryParam(
   return encodeURIComponent(tokenPatientId);
 }
 
-/**
- * Cigna: pharmacy / CARIN-BB data may be split across token member id (e.g. A000…) and FHIR Patient.id (gov-*).
- * Non-legacy API merges EOB + MedicationRequest when merge_patient_id differs from patient_id.
- */
-function cignaDualPatientMergeQuery(patientPayload: unknown, tokenPatientId: string): string {
-  const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
-  if (p?.resourceType !== "Patient" || typeof p.id !== "string") return "";
-  const fid = p.id.trim();
-  const tok = tokenPatientId.trim();
-  if (!fid || !tok || fid === tok) return "";
-  return `&merge_patient_id=${encodeURIComponent(fid)}`;
-}
-
 async function fetchFhirJson(
   apiBase: string,
   path: string,
@@ -197,11 +184,11 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         if (pat.ok) setPatientResource(pat.data);
         else errs.patient = summarizeFhirError(pat);
 
-        // Cigna: compartment reads use token/userinfo id (e.g. A000…); when Patient.id differs (gov-*), merge on server.
+        // Cigna: use token/userinfo patient id for all compartment reads (e.g. A000…), matching af603924-style proxy.
         // Other payers: use FHIR Patient.id from the returned resource when available.
         const compartmentQ =
           payerId === "cigna"
-            ? `?patient_id=${encodeURIComponent(patientId)}${cignaDualPatientMergeQuery(pat.ok ? pat.data : null, patientId)}`
+            ? `?patient_id=${encodeURIComponent(patientId)}`
             : `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
 
         setStatus("Loading Coverage…");
