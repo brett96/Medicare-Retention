@@ -29,7 +29,11 @@ function getQueryParamFromUrl(url: string, key: string): string | null {
 
 type FhirFetchResult = { ok: boolean; status: number; data: unknown };
 
-/** Token may carry a member/synthetic id (Cigna); compartment reads need the returned Patient.id. */
+/**
+ * Token may carry a member/synthetic id (e.g. A000…) while FHIR compartment data is keyed by
+ * the server’s Patient.id (e.g. evi-*, esi-*, gov-*). Always prefer returned Patient.id for
+ * Coverage/EOB/etc., including Cigna.
+ */
 function compartmentPatientQueryParam(
   tokenPatientId: string,
   patientPayload: unknown
@@ -184,12 +188,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         if (pat.ok) setPatientResource(pat.data);
         else errs.patient = summarizeFhirError(pat);
 
-        // Cigna: use token/userinfo patient id for all compartment reads (e.g. A000…).
-        // Other payers: use FHIR Patient.id from the returned resource when available.
-        const compartmentQ =
-          payerId === "cigna"
-            ? `?patient_id=${encodeURIComponent(patientId)}`
-            : `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
+        const compartmentQ = `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
 
         setStatus("Loading Coverage…");
         const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${compartmentQ}`, token);
