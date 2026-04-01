@@ -329,33 +329,174 @@ def _normalize_fhir_resource_type(segment: str) -> str:
     return aliases.get(s, s)
 
 
+def _fhir_search_extra_query() -> str:
+    """Optional &_count= for compartment searches (set FHIR_DEFAULT_SEARCH_COUNT, e.g. 100)."""
+    n = _env("FHIR_DEFAULT_SEARCH_COUNT")
+    if not n or not str(n).isdigit():
+        return ""
+    v = int(n)
+    if v < 1 or v > 500:
+        return ""
+    return f"&_count={v}"
+
+
 def _fhir_resource_url(cfg: PayerConfig, resource_type: str, patient_id: str) -> str:
     base = cfg.fhir_base_url.rstrip("/")
     pid = urllib.parse.quote(patient_id)
+    sq = _fhir_search_extra_query()
     rt = _normalize_fhir_resource_type(resource_type)
     if rt == "patient":
         if cfg.patient_lookup_mode == "id_search":
-            return f"{base}/Patient?_id={pid}"
+            return f"{base}/Patient?_id={pid}{sq}"
         return f"{base}/Patient/{pid}"
     if rt == "coverage":
-        return f"{base}/Coverage?patient={pid}"
+        return f"{base}/Coverage?patient={pid}{sq}"
     if rt == "encounter":
-        return f"{base}/Encounter?patient={pid}"
+        return f"{base}/Encounter?patient={pid}{sq}"
     if rt == "explanationofbenefit":
-        return f"{base}/ExplanationOfBenefit?patient={pid}"
+        return f"{base}/ExplanationOfBenefit?patient={pid}{sq}"
     # Patient-compartment medication & related claim data (Elevance payer-access FHIR exposes
     # a subset per their CapabilityStatement; search may return empty Bundle if not supported.)
     if rt == "medicationrequest":
-        return f"{base}/MedicationRequest?patient={pid}"
+        return f"{base}/MedicationRequest?patient={pid}{sq}"
     if rt == "medicationstatement":
-        return f"{base}/MedicationStatement?patient={pid}"
+        return f"{base}/MedicationStatement?patient={pid}{sq}"
     if rt == "medicationdispense":
-        return f"{base}/MedicationDispense?patient={pid}"
+        return f"{base}/MedicationDispense?patient={pid}{sq}"
     if rt == "claim":
-        return f"{base}/Claim?patient={pid}"
+        return f"{base}/Claim?patient={pid}{sq}"
     if rt == "claimresponse":
-        return f"{base}/ClaimResponse?patient={pid}"
+        return f"{base}/ClaimResponse?patient={pid}{sq}"
     raise ValueError(f"Unsupported resource type: {resource_type!r}")
+
+
+def _fhir_bundle_next_url(bundle: dict[str, Any]) -> Optional[str]:
+    links = bundle.get("link")
+    if not isinstance(links, list):
+        return None
+    for item in links:
+        if not isinstance(item, dict):
+            continue
+        if (item.get("relation") or "").strip().lower() != "next":
+            continue
+        u = item.get("url")
+        if isinstance(u, str) and u.strip():
+            return u.strip()
+    return None
+
+
+def _fhir_next_url_allowed(cfg: PayerConfig, url: str) -> bool:
+    try:
+        expect = urllib.parse.urlparse(cfg.fhir_base_url)
+        got = urllib.parse.urlparse(url)
+        if not got.scheme or not got.netloc:
+            return False
+        return expect.scheme == got.scheme and expect.netloc.lower() == got.netloc.lower()
+    except Exception:
+        return False
+
+
+def _fhir_resolve_next_url(cfg: PayerConfig, next_raw: str) -> Optional[str]:
+    n = next_raw.strip()
+    if not n:
+        return None
+    base_root = cfg.fhir_base_url.rstrip("/") + "/"
+    if n.startswith("http://") or n.startswith("https://"):
+        resolved = n
+    else:
+        resolved = urllib.parse.urljoin(base_root, n.lstrip("/"))
+    return resolved if _fhir_next_url_allowed(cfg, resolved) else None
+
+
+def _fhir_follow_bundle_next_pages(
+    cfg: PayerConfig,
+    first_bundle: dict[str, Any],
+    *,
+    headers: dict[str, str],
+    timeout: Union[float, Tuple[float, float]],
+) -> dict[str, Any]:
+    """
+    Merge FHIR searchset pages by following Bundle.link relation \"next\".
+    Payers (e.g. Cigna) often return only the first page unless clients paginate.
+    """
+    if _env("FHIR_PROXY_FOLLOW_BUNDLE_NEXT", "1") != "1":
+        return first_bundle
+
+    first_entries = first_bundle.get("entry")
+    if not isinstance(first_entries, list):
+        return first_bundle
+
+    next_raw = _fhir_bundle_next_url(first_bundle)
+    if not next_raw:
+        return first_bundle
+
+    max_pages_raw = _env("FHIR_PROXY_MAX_PAGES", "50")
+    try:
+        max_extra = max(0, int(max_pages_raw) - 1)
+    except ValueError:
+        max_extra = 49
+
+    merged: dict[str, Any] = dict(first_bundle)
+    entries: list[Any] = list(first_entries)
+    pages_fetched = 0
+    while next_raw and pages_fetched < max_extra:
+        next_url = _fhir_resolve_next_url(cfg, next_raw)
+        if not next_url:
+            break
+        try:
+            resp = requests.get(next_url, headers=headers, timeout=timeout)
+        except requests.RequestException:
+            break
+        if resp.status_code != 200:
+            break
+        try:
+            body: Any = resp.json()
+        except ValueError:
+            break
+        if not isinstance(body, dict) or body.get("resourceType") != "Bundle":
+            break
+        chunk = body.get("entry")
+        if isinstance(chunk, list):
+            entries.extend(chunk)
+        next_raw = _fhir_bundle_next_url(body)
+        pages_fetched += 1
+
+    merged["entry"] = entries
+    if "total" not in merged or merged.get("total") is None:
+        merged["total"] = len(entries)
+    links_out: list[dict[str, Any]] = []
+    for item in merged.get("link") or []:
+        if isinstance(item, dict) and (item.get("relation") or "").strip().lower() == "next":
+            continue
+        if isinstance(item, dict):
+            links_out.append(item)
+    merged["link"] = links_out
+    if pages_fetched > 0:
+        meta = merged.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            merged["meta"] = meta
+        tlist = meta.get("tag")
+        tags = list(tlist) if isinstance(tlist, list) else []
+        tags.append(
+            {
+                "system": "https://medicare-retention.local/fhir-proxy",
+                "code": "merged-pages",
+                "display": (
+                    f"Proxy merged {pages_fetched + 1} Bundle page(s). "
+                    "FHIR_PROXY_FOLLOW_BUNDLE_NEXT=0 disables; FHIR_PROXY_MAX_PAGES caps pages."
+                ),
+            }
+        )
+        meta["tag"] = tags
+    return merged
+
+
+def _fhir_should_follow_bundle_next(resource_type: str) -> bool:
+    if _env("FHIR_PROXY_FOLLOW_BUNDLE_NEXT", "1") != "1":
+        return False
+    rt = _normalize_fhir_resource_type(resource_type)
+    return rt != "patient"
 
 
 @require_GET
@@ -723,6 +864,24 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
             err_body = None
         if _is_fhir_resource_not_supported_outcome(err_body):
             return JsonResponse(_empty_fhir_search_bundle(), status=200)
+
+    if resp.status_code == 200 and _fhir_should_follow_bundle_next(resource_type):
+        try:
+            bundle_body: Any = json.loads(resp.content.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            bundle_body = None
+        if (
+            isinstance(bundle_body, dict)
+            and bundle_body.get("resourceType") == "Bundle"
+            and _fhir_bundle_next_url(bundle_body)
+        ):
+            tok = _bearer_token(request)
+            if tok:
+                hdrs = {"Authorization": f"Bearer {tok}", "Accept": "application/fhir+json"}
+                merged = _fhir_follow_bundle_next_pages(
+                    cfg, bundle_body, headers=hdrs, timeout=_http_timeout()
+                )
+                return JsonResponse(merged, status=200, safe=isinstance(merged, dict))
 
     # If we got a successful response, unwrap Patient Bundles for better UI compatibility.
     if _normalize_fhir_resource_type(resource_type) == "patient" and resp.status_code == 200:
