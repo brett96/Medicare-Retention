@@ -74,15 +74,9 @@ _ELEVANCE_FHIR_UNSUPPORTED = frozenset(
     }
 )
 
-# Cigna Patient Access FHIR does not expose these resource types (OperationOutcome not-supported).
-_CIGNA_FHIR_UNSUPPORTED = frozenset(
-    {
-        "medicationstatement",
-        "medicationdispense",
-        "claim",
-        "claimresponse",
-    }
-)
+# Cigna: do not short-circuit to an empty Bundle — always proxy to the payer so pharmacy EOB / Rx
+# and related resources return real payloads (matches pre–multi-payer auth_views behavior).
+_CIGNA_FHIR_UNSUPPORTED: frozenset[str] = frozenset()
 
 # Cigna Patient Access — sandbox defaults when optional CIGNA_* URLs are unset.
 # Override all of these for production or if Cigna updates their developer docs:
@@ -100,8 +94,14 @@ DEFAULT_AETNA_FHIR_BASE_URL = "https://vteapif1.aetna.com/fhirdemo/v2/patientacc
 DEFAULT_AETNA_OAUTH_AUDIENCE = "https://vteapif1.aetna.com/fhirdemo"
 DEFAULT_AETNA_SCOPE = "launch/patient patient/*.read"
 
-# Aetna docs list MedicationRequest/Dispense; MedicationStatement is not called out for MA — skip if unsupported.
-_AETNA_FHIR_UNSUPPORTED = frozenset({"medicationstatement"})
+# Aetna: MedicationStatement not in MA table; Claim/ClaimResponse often 404 on patient compartment (CARIN uses EOB).
+_AETNA_FHIR_UNSUPPORTED = frozenset(
+    {
+        "medicationstatement",
+        "claim",
+        "claimresponse",
+    }
+)
 
 
 def _require_env(name: str) -> str:

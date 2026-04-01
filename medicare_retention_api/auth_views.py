@@ -340,10 +340,12 @@ def _fhir_search_extra_query() -> str:
     return f"&_count={v}"
 
 
-def _fhir_resource_url(cfg: PayerConfig, resource_type: str, patient_id: str) -> str:
+def _fhir_resource_url(
+    cfg: PayerConfig, resource_type: str, patient_id: str, *, with_search_extras: bool = True
+) -> str:
     base = cfg.fhir_base_url.rstrip("/")
     pid = urllib.parse.quote(patient_id)
-    sq = _fhir_search_extra_query()
+    sq = _fhir_search_extra_query() if with_search_extras else ""
     rt = _normalize_fhir_resource_type(resource_type)
     if rt == "patient":
         if cfg.patient_lookup_mode == "id_search":
@@ -871,6 +873,31 @@ def _unwrap_patient_bundle(data: Any) -> Any:
     return patients[0]
 
 
+def _proxy_fhir_cigna_legacy(
+    request: HttpRequest, cfg: PayerConfig, resource_type: str, patient_id: str
+) -> HttpResponse:
+    """
+    Match older Cigna integration: single GET, no &_count, no Bundle pagination merge,
+    no dual-patient merge, no mapping OperationOutcome to an empty Bundle.
+    Only extra step: unwrap Patient search Bundle (prefer gov-*).
+    """
+    rt = _normalize_fhir_resource_type(resource_type)
+    try:
+        url = _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
+    except ValueError as e:
+        return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
+
+    resp = _fhir_get_json(request, url)
+    if rt == "patient" and resp.status_code == 200:
+        try:
+            payload: Any = json.loads(resp.content.decode("utf-8"))
+        except Exception:
+            return resp
+        payload = _unwrap_patient_bundle(payload)
+        return JsonResponse(payload, status=200, safe=isinstance(payload, dict))
+    return resp
+
+
 def _fhir_get_json(request: HttpRequest, url: str) -> HttpResponse:
     token = _bearer_token(request)
     if not token:
@@ -907,6 +934,9 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
     patient_id = request.GET.get("patient_id") or request.GET.get("patient")
     if not patient_id:
         return JsonResponse({"error": "missing_patient_id"}, status=400)
+
+    if cfg.payer_id == "cigna" and _env("CIGNA_LEGACY_FHIR_PROXY", "1") == "1":
+        return _proxy_fhir_cigna_legacy(request, cfg, resource_type, patient_id)
 
     try:
         url = _fhir_resource_url(cfg, resource_type, patient_id)
