@@ -18,6 +18,26 @@ def _env(name: str, default: str | None = None) -> str | None:
     return v.strip()
 
 
+def build_oauth_authorize_query_string(
+    params: dict[str, str], *, scope_literal_asterisk: bool = False
+) -> str:
+    """
+    Build application/x-www-form-urlencoded query for OAuth /authorize.
+
+    When scope_literal_asterisk is True, the value of `scope` keeps a literal `*` (patient/*.read).
+    urllib.parse.urlencode encodes * as %2A, which some hosts (e.g. Aetna VTE login SPA) mishandle.
+    """
+    parts: list[str] = []
+    for key, val in params.items():
+        k = urllib.parse.quote(key, safe="")
+        if key == "scope" and scope_literal_asterisk:
+            v = urllib.parse.quote(val, safe="*")
+        else:
+            v = urllib.parse.quote(val, safe="")
+        parts.append(f"{k}={v}")
+    return "&".join(parts)
+
+
 PatientLookupMode = Literal["path", "id_search"]
 
 
