@@ -487,21 +487,47 @@ def _empty_fhir_search_bundle() -> dict[str, Any]:
     return {"resourceType": "Bundle", "type": "searchset", "total": 0, "entry": []}
 
 
+def _unwrap_nested_fhir_error(body: Any) -> Any:
+    """Our proxy wraps upstream JSON as { error: 'fhir_error', response: <upstream> }."""
+    if isinstance(body, dict) and body.get("error") == "fhir_error" and isinstance(body.get("response"), (dict, list)):
+        return body["response"]
+    return body
+
+
+def _issue_text_for_not_supported_check(it: dict[str, Any]) -> str:
+    """Combine diagnostics + details.text for matching (FHIR may use either)."""
+    parts: list[str] = []
+    d = it.get("diagnostics")
+    if isinstance(d, str) and d.strip():
+        parts.append(d)
+    details = it.get("details")
+    if isinstance(details, dict):
+        t = details.get("text")
+        if isinstance(t, str) and t.strip():
+            parts.append(t)
+    return " ".join(parts).lower()
+
+
 def _is_fhir_resource_not_supported_outcome(body: Any) -> bool:
-    """True when payer returns OperationOutcome for an unavailable resource type (e.g. Cigna)."""
-    if not isinstance(body, dict) or body.get("resourceType") != "OperationOutcome":
+    """
+    True when payer returns OperationOutcome meaning this resource type is not implemented.
+    Must be specific: bare 'not-supported' is used for other failures; require wording that
+    indicates the resource type is unavailable (Cigna: 'Resource not available: X').
+    """
+    inner = _unwrap_nested_fhir_error(body)
+    if not isinstance(inner, dict) or inner.get("resourceType") != "OperationOutcome":
         return False
-    issues = body.get("issue")
+    issues = inner.get("issue")
     if not isinstance(issues, list):
         return False
     for it in issues:
         if not isinstance(it, dict):
             continue
         code = (it.get("code") or "").strip().lower()
-        diag = (it.get("diagnostics") or "") if isinstance(it.get("diagnostics"), str) else ""
-        if code == "not-supported":
-            return True
-        if "resource not available" in diag.lower():
+        if code != "not-supported":
+            continue
+        combined = _issue_text_for_not_supported_check(it)
+        if "resource not available" in combined:
             return True
     return False
 

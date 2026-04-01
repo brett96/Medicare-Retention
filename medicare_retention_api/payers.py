@@ -79,7 +79,7 @@ def _elevance_payer() -> PayerConfig:
         requires_userinfo=False,
         userinfo_url=None,
         patient_lookup_mode="path",
-        fhir_unsupported_resources=frozenset(),
+        fhir_unsupported_resources=_ELEVANCE_FHIR_UNSUPPORTED,
     )
 
 
