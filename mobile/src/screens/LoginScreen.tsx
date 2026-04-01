@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { Linking, Platform, Text, TextInput, TouchableOpacity, View } from "react-native";
 
-export type PayerId = "elevance" | "cigna";
+export type PayerId = "elevance" | "cigna" | "aetna";
 
 type Props = {
   /** Default API origin (no trailing slash), e.g. from EXPO_PUBLIC_API_BASE_URL */
@@ -46,7 +46,7 @@ export function LoginScreen(props: Props) {
     >
       <Text style={{ fontSize: 16, fontWeight: "600" }}>Connect your payer</Text>
       <Text style={{ fontSize: 13, color: "#555", marginTop: 8, lineHeight: 20 }}>
-        Choose Elevance or Cigna, then open the OAuth page. After approval, use the handoff screen with{" "}
+        Choose your payer, then open the OAuth page. After approval, use the handoff screen with{" "}
         <Text style={{ fontFamily: "Courier" }}>{`?code=…&api_base=…`}</Text> or the app deep link.
       </Text>
 
@@ -54,7 +54,7 @@ export function LoginScreen(props: Props) {
 
       <Text style={{ fontWeight: "600" }}>Payer</Text>
       <View style={{ flexDirection: "row", gap: 10, marginTop: 8, flexWrap: "wrap" as any }}>
-        {(["elevance", "cigna"] as const).map((id) => (
+        {(["elevance", "cigna", "aetna"] as const).map((id) => (
           <TouchableOpacity
             key={id}
             onPress={() => setPayer(id)}
@@ -66,7 +66,7 @@ export function LoginScreen(props: Props) {
             }}
           >
             <Text style={{ color: payer === id ? "#fff" : "#111", fontWeight: "600" }}>
-              {id === "elevance" ? "Elevance" : "Cigna"}
+              {id === "elevance" ? "Elevance" : id === "cigna" ? "Cigna" : "Aetna"}
             </Text>
           </TouchableOpacity>
         ))}

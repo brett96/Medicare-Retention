@@ -36,6 +36,8 @@ class PayerConfig:
     patient_lookup_mode: PatientLookupMode
     # Normalized resource types (auth_views._normalize_fhir_resource_type); never proxied — empty Bundle returned.
     fhir_unsupported_resources: frozenset[str] = field(default_factory=frozenset)
+    # SMART authorize `aud` when it differs from FHIR API base (e.g. Aetna: aud = …/fhirdemo, FHIR = …/v2/patientaccess).
+    oauth_audience: str | None = None
 
 
 DEFAULT_SCOPE = "launch/patient patient/*.read openid fhirUser"
@@ -64,6 +66,17 @@ DEFAULT_CIGNA_AUTH_URL = "https://r-hi2.cigna.com/mga/sps/oauth/oauth20/authoriz
 DEFAULT_CIGNA_TOKEN_URL = "https://r-hi2.cigna.com/mga/sps/oauth/oauth20/token"
 DEFAULT_CIGNA_FHIR_BASE_URL = "https://p-hi2.digitaledge.cigna.com/ConsumerAccess/v1-devportal"
 DEFAULT_CIGNA_USERINFO_URL = "https://r-hi2.cigna.com/mga/sps/oauth/oauth20/userinfo"
+
+# Aetna Patient Access sandbox (Token Generation Process / validation doc).
+DEFAULT_AETNA_AUTH_URL = "https://vteapif1.aetna.com/fhirdemo/v1/fhirserver_auth/oauth2/authorize"
+DEFAULT_AETNA_TOKEN_URL = "https://vteapif1.aetna.com/fhirdemo/v1/fhirserver_auth/oauth2/token"
+DEFAULT_AETNA_FHIR_BASE_URL = "https://vteapif1.aetna.com/fhirdemo/v2/patientaccess"
+# Required `aud` on /authorize is the FHIR demo root, not the v2/patientaccess path.
+DEFAULT_AETNA_OAUTH_AUDIENCE = "https://vteapif1.aetna.com/fhirdemo"
+DEFAULT_AETNA_SCOPE = "launch/patient patient/*.read"
+
+# Aetna docs list MedicationRequest/Dispense; MedicationStatement is not called out for MA — skip if unsupported.
+_AETNA_FHIR_UNSUPPORTED = frozenset({"medicationstatement"})
 
 
 def _require_env(name: str) -> str:
@@ -108,15 +121,47 @@ def _cigna_payer() -> PayerConfig:
     )
 
 
+def _aetna_payer() -> PayerConfig:
+    fhir_base = _env("AETNA_FHIR_BASE_URL", DEFAULT_AETNA_FHIR_BASE_URL) or DEFAULT_AETNA_FHIR_BASE_URL
+    aud = _env("AETNA_AUD", DEFAULT_AETNA_OAUTH_AUDIENCE) or DEFAULT_AETNA_OAUTH_AUDIENCE
+    userinfo = _env("AETNA_USERINFO_URL")
+    return PayerConfig(
+        payer_id="aetna",
+        client_id=_require_env("AETNA_CLIENT_ID"),
+        client_secret=_require_env("AETNA_CLIENT_SECRET"),
+        redirect_uri=_require_env("AETNA_REDIRECT_URI"),
+        auth_url=_env("AETNA_AUTH_URL", DEFAULT_AETNA_AUTH_URL) or DEFAULT_AETNA_AUTH_URL,
+        token_url=_env("AETNA_TOKEN_URL", DEFAULT_AETNA_TOKEN_URL) or DEFAULT_AETNA_TOKEN_URL,
+        fhir_base_url=fhir_base,
+        scope=_env("AETNA_SCOPE", DEFAULT_AETNA_SCOPE) or DEFAULT_AETNA_SCOPE,
+        requires_userinfo=bool(userinfo),
+        userinfo_url=userinfo,
+        patient_lookup_mode="path",
+        fhir_unsupported_resources=_AETNA_FHIR_UNSUPPORTED,
+        oauth_audience=aud,
+    )
+
+
 _BUILDERS = {
-    "elevance": _elevance_payer,
+    "aetna": _aetna_payer,
     "cigna": _cigna_payer,
+    "elevance": _elevance_payer,
 }
+
+# Disabled placeholders on /authorize until OAuth + env are implemented (not in _BUILDERS).
+# Tuple: (id_slug, display_label, optional public documentation URL).
+PLANNED_PAYER_ROWS: tuple[tuple[str, str, str | None], ...] = (
+    ("humana", "Humana", None),
+    ("uhc", "UnitedHealthcare — Patient Access", None),
+    ("centene", "Centene", None),
+)
+
 
 # Human-readable labels for the /authorize picker (extend when adding payers).
 PAYER_DISPLAY_NAMES: dict[str, str] = {
     "elevance": "Elevance",
     "cigna": "Cigna — Patient Access",
+    "aetna": "Aetna — Patient Access",
 }
 
 
@@ -131,14 +176,29 @@ def list_configured_payers() -> list[tuple[str, str]]:
     Returns list of (payer_id, display_label) sorted by payer_id.
     """
     out: list[tuple[str, str]] = []
+    for pid, label, ok, _ in list_picker_payer_rows():
+        if ok:
+            out.append((pid, label))
+    return out
+
+
+def list_picker_payer_rows() -> list[tuple[str, str, bool, str | None]]:
+    """
+    All registered payers for the /authorize UI: (id, label, configured, setup_hint).
+
+    `setup_hint` is a short message when configured is False (which env vars to set).
+    """
+    rows: list[tuple[str, str, bool, str | None]] = []
     for pid in list_registered_payer_ids():
+        label = PAYER_DISPLAY_NAMES.get(pid, pid.replace("_", " ").title())
         try:
             get_payer_config(pid)
-        except (KeyError, RuntimeError):
-            continue
-        label = PAYER_DISPLAY_NAMES.get(pid, pid.replace("_", " ").title())
-        out.append((pid, label))
-    return out
+        except RuntimeError as e:
+            hint = str(e).replace("Missing required environment variable: ", "")
+            rows.append((pid, label, False, f"Set {hint} in the environment."))
+        else:
+            rows.append((pid, label, True, None))
+    return rows
 
 
 def get_payer_config(payer_id: str) -> PayerConfig:

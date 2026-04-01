@@ -19,7 +19,12 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from gateway.models import PkceSession, TokenExchangeCode
-from medicare_retention_api.payers import PayerConfig, get_payer_config, list_configured_payers
+from medicare_retention_api.payers import (
+    PLANNED_PAYER_ROWS,
+    PayerConfig,
+    get_payer_config,
+    list_picker_payer_rows,
+)
 
 
 def _http_timeout() -> Union[float, Tuple[float, float]]:
@@ -71,25 +76,69 @@ def _http_redirect(location: str) -> HttpResponse:
     return r
 
 
+def _planned_payer_picker_items() -> list[str]:
+    """HTML <li> fragments for payers we plan to support (not yet integrated)."""
+    out: list[str] = []
+    for _pid, label, docs_url in PLANNED_PAYER_ROWS:
+        safe_label = html.escape(label)
+        hint_inner = "Coming soon — SMART / OAuth integration is not available yet."
+        if docs_url:
+            u = html.escape(docs_url, quote=True)
+            hint_inner += (
+                f' <a class="inline-link" href="{u}" target="_blank" rel="noopener noreferrer">'
+                "Program overview (opens in new tab)</a>"
+            )
+        title = html.escape(
+            "Planned integration — not connected.",
+            quote=True,
+        )
+        out.append(
+            f'<li class="payer-row-planned"><span class="btn btn-planned" title="{title}">{safe_label}</span>'
+            f'<p class="setup-hint">{hint_inner}</p></li>'
+        )
+    return out
+
+
 def _html_authorize_picker(request: HttpRequest) -> HttpResponse:
     """Browser landing at /authorize: choose payer, then GET /api/auth/<id>/authorize/."""
-    payers = list_configured_payers()
+    picker_rows = list_picker_payer_rows()
     rows: list[str] = []
-    for pid, label in payers:
-        path = f"/api/auth/{urllib.parse.quote(pid)}/authorize/"
-        href = request.build_absolute_uri(path)
+    for pid, label, configured, setup_hint in picker_rows:
         safe_label = html.escape(label)
-        payer_class = " btn-cigna" if pid == "cigna" else ""
-        rows.append(
-            f'<li><a class="btn{payer_class}" href="{html.escape(href, quote=True)}">{safe_label}</a></li>'
+        payer_class = (
+            " btn-cigna"
+            if pid == "cigna"
+            else (" btn-aetna" if pid == "aetna" else "")
         )
-    if not rows:
-        list_html = (
+        if configured:
+            path = f"/api/auth/{urllib.parse.quote(pid)}/authorize/"
+            href = request.build_absolute_uri(path)
+            rows.append(
+                f'<li><a class="btn{payer_class}" href="{html.escape(href, quote=True)}">{safe_label}</a></li>'
+            )
+        else:
+            hint = html.escape(setup_hint or "Configure environment variables for this payer.")
+            rows.append(
+                f'<li class="payer-row-disabled"><span class="btn btn-disabled{payer_class}" '
+                f'title="{hint}">{safe_label}</span>'
+                f'<p class="setup-hint">{hint}</p></li>'
+            )
+    chunks: list[str] = []
+    if rows:
+        chunks.append('<ul class="payers">\n' + "\n".join(rows) + "\n</ul>")
+    else:
+        chunks.append(
             "<p class=\"muted\">No payers are fully configured yet. "
             "Set the environment variables for at least one payer (see <code>payers.py</code> / deployment docs).</p>"
         )
-    else:
-        list_html = "<ul class=\"payers\">\n" + "\n".join(rows) + "\n</ul>"
+    planned = _planned_payer_picker_items()
+    if planned:
+        chunks.append(
+            '<h2 class="subhead">Coming soon</h2>\n<ul class="payers payers-planned">\n'
+            + "\n".join(planned)
+            + "\n</ul>"
+        )
+    list_html = "\n".join(chunks)
 
     body = f"""<!DOCTYPE html>
 <html lang="en">
@@ -104,7 +153,9 @@ def _html_authorize_picker(request: HttpRequest) -> HttpResponse:
             padding: 1.75rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
     h1 {{ font-size: 1.35rem; margin: 0 0 0.5rem; }}
     p.lead {{ margin: 0 0 1.25rem; color: #555; font-size: 0.95rem; line-height: 1.45; }}
+    h2.subhead {{ font-size: 0.95rem; font-weight: 700; margin: 1.35rem 0 0.5rem; color: #444; }}
     ul.payers {{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.65rem; }}
+    ul.payers-planned {{ margin-top: 0; }}
     a.btn {{
       display: block; text-align: center; text-decoration: none;
       padding: 0.85rem 1rem; border-radius: 10px; background: #111; color: #fff;
@@ -113,6 +164,22 @@ def _html_authorize_picker(request: HttpRequest) -> HttpResponse:
     a.btn:hover {{ background: #333; }}
     a.btn.btn-cigna {{ background: #0a6a92; }}
     a.btn.btn-cigna:hover {{ background: #084a6b; }}
+    a.btn.btn-aetna {{ background: #6d1a7a; }}
+    a.btn.btn-aetna:hover {{ background: #4d1256; }}
+    span.btn-disabled {{
+      display: block; text-align: center; padding: 0.85rem 1rem; border-radius: 10px;
+      background: #ccc; color: #555; font-weight: 600; font-size: 1rem; cursor: not-allowed;
+    }}
+    span.btn-disabled.btn-cigna {{ background: #a8c5d4; color: #3d5a66; }}
+    span.btn-disabled.btn-aetna {{ background: #c9b0cf; color: #4a3550; }}
+    span.btn-planned {{
+      display: block; text-align: center; padding: 0.85rem 1rem; border-radius: 10px;
+      background: #eceef1; color: #5a5f66; font-weight: 600; font-size: 1rem; cursor: default;
+      border: 1px dashed #b8c0cc;
+    }}
+    a.inline-link {{ color: #0a5cad; }}
+    a.inline-link:hover {{ text-decoration: underline; }}
+    p.setup-hint {{ margin: 0.35rem 0 0; font-size: 0.8rem; color: #777; line-height: 1.35; }}
     p.muted {{ color: #666; font-size: 0.9rem; line-height: 1.5; }}
     code {{ font-size: 0.85em; }}
   </style>
@@ -165,6 +232,25 @@ def _exchange_authorization_code(cfg: PayerConfig, *, code: str, code_verifier: 
     return requests.post(cfg.token_url, data=token_payload, headers=headers, timeout=_http_timeout())
 
 
+def _patient_id_from_access_token_jwt(access_token: str) -> Optional[str]:
+    """Decode JWT payload (no signature verify) for SMART `patient` / fhirUser claims (e.g. Aetna)."""
+    parts = access_token.split(".")
+    if len(parts) < 2:
+        return None
+    payload_b64 = parts[1]
+    pad = (-len(payload_b64)) % 4
+    if pad:
+        payload_b64 += "=" * pad
+    try:
+        raw = base64.urlsafe_b64decode(payload_b64.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return _patient_id_from_userinfo(data)
+
+
 def _patient_id_from_userinfo(data: Dict[str, Any]) -> Optional[str]:
     p = data.get("patient")
     if p is not None and str(p).strip():
@@ -185,10 +271,16 @@ def _patient_id_from_userinfo(data: Dict[str, Any]) -> Optional[str]:
 def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
     if not cfg.requires_userinfo:
         raw = token.get("patient") if token.get("patient") is not None else token.get("patient_id")
-        if raw is None:
-            return None
-        s = str(raw).strip()
-        return s or None
+        if raw is not None:
+            s = str(raw).strip()
+            if s:
+                return s
+        at = token.get("access_token")
+        if isinstance(at, str) and at.strip():
+            jid = _patient_id_from_access_token_jwt(at.strip())
+            if jid:
+                return jid
+        return None
     if not cfg.userinfo_url:
         return None
     access = token.get("access_token")
@@ -284,6 +376,7 @@ def oauth_authorize(request: HttpRequest, payer_id: str) -> HttpResponse:
         expires_at=now + timedelta(minutes=10),
     )
 
+    aud = cfg.oauth_audience if cfg.oauth_audience else cfg.fhir_base_url
     params = {
         "response_type": "code",
         "client_id": cfg.client_id,
@@ -292,7 +385,7 @@ def oauth_authorize(request: HttpRequest, payer_id: str) -> HttpResponse:
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
-        "aud": cfg.fhir_base_url,
+        "aud": aud,
     }
     url = f"{cfg.auth_url}?{urllib.parse.urlencode(params)}"
     return redirect(url)
@@ -470,6 +563,7 @@ def oauth_debug_config(request: HttpRequest) -> HttpResponse:
             "redirect_uri": cfg.redirect_uri,
             "authorize_url": cfg.auth_url,
             "client_id": cfg.client_id,
+            "oauth_audience": cfg.oauth_audience or cfg.fhir_base_url,
             "requires_userinfo": cfg.requires_userinfo,
             "hint": "Register redirect_uri EXACTLY in the payer developer portal (scheme, host, path, trailing slash).",
         }

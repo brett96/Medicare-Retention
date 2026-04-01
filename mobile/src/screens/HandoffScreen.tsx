@@ -29,6 +29,18 @@ function getQueryParamFromUrl(url: string, key: string): string | null {
 
 type FhirFetchResult = { ok: boolean; status: number; data: unknown };
 
+/** Token may carry a member/synthetic id (Cigna); compartment reads need the returned Patient.id. */
+function compartmentPatientQueryParam(
+  tokenPatientId: string,
+  patientPayload: unknown
+): string {
+  const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
+  if (p?.resourceType === "Patient" && typeof p.id === "string" && p.id.trim()) {
+    return encodeURIComponent(p.id.trim());
+  }
+  return encodeURIComponent(tokenPatientId);
+}
+
 async function fetchFhirJson(
   apiBase: string,
   path: string,
@@ -157,41 +169,46 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
           return;
         }
 
-        const pid = encodeURIComponent(patientId);
         const token = tokenJson.access_token as string;
         const payerSeg = encodeURIComponent(payerId);
-        const q = `?patient_id=${pid}`;
+        const patientLookupQ = `?patient_id=${encodeURIComponent(patientId)}`;
 
         const errs: Record<string, string> = {};
 
         setStatus("Loading Patient…");
-        const pat = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Patient/${q}`, token);
+        const pat = await fetchFhirJson(
+          apiBase,
+          `/api/fhir/${payerSeg}/Patient/${patientLookupQ}`,
+          token
+        );
         if (pat.ok) setPatientResource(pat.data);
         else errs.patient = summarizeFhirError(pat);
 
+        const compartmentQ = `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
+
         setStatus("Loading Coverage…");
-        const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${q}`, token);
+        const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${compartmentQ}`, token);
         if (cov.ok) setCoverageBundle(cov.data);
         else errs.coverage = summarizeFhirError(cov);
 
         setStatus("Loading Explanation of Benefit…");
         const eob = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/ExplanationOfBenefit/${q}`,
+          `/api/fhir/${payerSeg}/ExplanationOfBenefit/${compartmentQ}`,
           token
         );
         if (eob.ok) setEobBundle(eob.data);
         else errs.eob = summarizeFhirError(eob);
 
         setStatus("Loading Encounters…");
-        const enc = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Encounter/${q}`, token);
+        const enc = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Encounter/${compartmentQ}`, token);
         if (enc.ok) setEncounterBundle(enc.data);
         else errs.encounter = summarizeFhirError(enc);
 
         setStatus("Loading MedicationRequest (prescriptions)…");
         const mr = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/MedicationRequest/${q}`,
+          `/api/fhir/${payerSeg}/MedicationRequest/${compartmentQ}`,
           token
         );
         if (mr.ok) setMedicationRequestBundle(mr.data);
@@ -200,7 +217,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         setStatus("Loading MedicationStatement…");
         const ms = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/MedicationStatement/${q}`,
+          `/api/fhir/${payerSeg}/MedicationStatement/${compartmentQ}`,
           token
         );
         if (ms.ok) setMedicationStatementBundle(ms.data);
@@ -209,14 +226,14 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         setStatus("Loading MedicationDispense…");
         const md = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/MedicationDispense/${q}`,
+          `/api/fhir/${payerSeg}/MedicationDispense/${compartmentQ}`,
           token
         );
         if (md.ok) setMedicationDispenseBundle(md.data);
         else errs.medicationDispense = summarizeFhirError(md);
 
         setStatus("Loading Claim…");
-        const cl = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Claim/${q}`, token);
+        const cl = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Claim/${compartmentQ}`, token);
         if (cl.ok) setClaimBundle(cl.data);
         else errs.claim = summarizeFhirError(cl);
 

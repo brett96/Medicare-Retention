@@ -72,6 +72,8 @@ class PayerTestConfig:
     scope: str
     requires_userinfo: bool
     userinfo_url: Optional[str]
+    # SMART authorize `aud` when different from FHIR base (Aetna).
+    oauth_audience: Optional[str] = None
 
 
 def _require(name: str) -> str:
@@ -93,6 +95,28 @@ def load_elevance_config() -> PayerTestConfig:
         scope=_env("ELEVANCE_SCOPE", DEFAULT_SCOPE) or DEFAULT_SCOPE,
         requires_userinfo=False,
         userinfo_url=None,
+    )
+
+
+def load_aetna_config() -> PayerTestConfig:
+    default_auth = "https://vteapif1.aetna.com/fhirdemo/v1/fhirserver_auth/oauth2/authorize"
+    default_token = "https://vteapif1.aetna.com/fhirdemo/v1/fhirserver_auth/oauth2/token"
+    default_fhir = "https://vteapif1.aetna.com/fhirdemo/v2/patientaccess"
+    default_aud = "https://vteapif1.aetna.com/fhirdemo"
+    default_scope = "launch/patient patient/*.read"
+    userinfo = _env("AETNA_USERINFO_URL")
+    return PayerTestConfig(
+        payer_id="aetna",
+        client_id=_require("AETNA_CLIENT_ID"),
+        client_secret=_require("AETNA_CLIENT_SECRET"),
+        redirect_uri=_require("AETNA_REDIRECT_URI"),
+        auth_url=_env("AETNA_AUTH_URL", default_auth) or default_auth,
+        token_url=_env("AETNA_TOKEN_URL", default_token) or default_token,
+        fhir_base_url=_env("AETNA_FHIR_BASE_URL", default_fhir) or default_fhir,
+        scope=_env("AETNA_SCOPE", default_scope) or default_scope,
+        requires_userinfo=bool(userinfo),
+        userinfo_url=userinfo,
+        oauth_audience=_env("AETNA_AUD", default_aud) or default_aud,
     )
 
 
@@ -277,6 +301,35 @@ def fetch_userinfo_patient_id(cfg: PayerTestConfig, access_token: str) -> Option
     return None
 
 
+def _patient_id_from_jwt_access_token(access_token: str) -> Optional[str]:
+    parts = access_token.split(".")
+    if len(parts) < 2:
+        return None
+    payload_b64 = parts[1]
+    pad = (-len(payload_b64)) % 4
+    if pad:
+        payload_b64 += "=" * pad
+    try:
+        raw = base64.urlsafe_b64decode(payload_b64.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    p = data.get("patient")
+    if p is not None and str(p).strip():
+        return str(p).strip()
+    for key in ("fhirUser", "fhir_user"):
+        fu = data.get(key)
+        if isinstance(fu, str) and fu.strip():
+            s = fu.strip()
+            return s.rsplit("/", 1)[-1] if "/" in s else s
+    sub = data.get("sub")
+    if sub is not None and str(sub).strip():
+        return str(sub).strip()
+    return None
+
+
 def resolve_patient_id(cfg: PayerTestConfig, token: Dict[str, Any]) -> Optional[str]:
     if cfg.requires_userinfo:
         at = token.get("access_token")
@@ -284,10 +337,14 @@ def resolve_patient_id(cfg: PayerTestConfig, token: Dict[str, Any]) -> Optional[
             return fetch_userinfo_patient_id(cfg, at)
         return None
     raw = token.get("patient") if token.get("patient") is not None else token.get("patient_id")
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    return s or None
+    if raw is not None:
+        s = str(raw).strip()
+        if s:
+            return s
+    at = token.get("access_token")
+    if isinstance(at, str) and at.strip():
+        return _patient_id_from_jwt_access_token(at.strip())
+    return None
 
 
 def fetch_eob(cfg: PayerTestConfig, *, access_token: str, patient_id: str) -> Dict[str, Any]:
@@ -338,11 +395,14 @@ def _interactive_payer_choice() -> str:
     print("\nSelect payer to test:")
     print("  1) Elevance")
     print("  2) Cigna")
-    choice = input("Enter 1 or 2: ").strip()
+    print("  3) Aetna")
+    choice = input("Enter 1, 2, or 3: ").strip()
     if choice == "1":
         return "elevance"
     if choice == "2":
         return "cigna"
+    if choice == "3":
+        return "aetna"
     print("Invalid choice; defaulting to Elevance.", file=sys.stderr)
     return "elevance"
 
@@ -351,9 +411,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="SMART on FHIR PKCE + FHIR smoke test (multi-payer).")
     parser.add_argument(
         "--payer",
-        choices=("1", "2", "elevance", "cigna"),
+        choices=("1", "2", "3", "elevance", "cigna", "aetna"),
         default=None,
-        help="1=Elevance, 2=Cigna (if omitted, prompts interactively)",
+        help="1=Elevance, 2=Cigna, 3=Aetna (if omitted, prompts interactively)",
     )
     args = parser.parse_args()
 
@@ -361,11 +421,18 @@ def main() -> int:
         payer_key = _interactive_payer_choice()
     elif args.payer in ("1", "elevance"):
         payer_key = "elevance"
-    else:
+    elif args.payer in ("2", "cigna"):
         payer_key = "cigna"
+    else:
+        payer_key = "aetna"
 
     try:
-        cfg = load_elevance_config() if payer_key == "elevance" else load_cigna_config()
+        if payer_key == "elevance":
+            cfg = load_elevance_config()
+        elif payer_key == "cigna":
+            cfg = load_cigna_config()
+        else:
+            cfg = load_aetna_config()
     except ConfigError as e:
         print(f"[CONFIG ERROR] {e}", file=sys.stderr)
         print(
@@ -374,6 +441,7 @@ def main() -> int:
                 Set payer-specific variables in .env (see .env.example):
                   Elevance: ELEVANCE_CLIENT_ID, ELEVANCE_REDIRECT_URI, ELEVANCE_AUTH_URL, ...
                   Cigna: CIGNA_CLIENT_ID, CIGNA_REDIRECT_URI (optional URL overrides: CIGNA_AUTH_URL, …)
+                  Aetna: AETNA_CLIENT_ID, AETNA_CLIENT_SECRET, AETNA_REDIRECT_URI (optional: AETNA_AUD, AETNA_FHIR_BASE_URL, …)
                 """
             ).strip(),
             file=sys.stderr,
