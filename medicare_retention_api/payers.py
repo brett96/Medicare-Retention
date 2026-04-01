@@ -7,7 +7,7 @@ Uses the same `_env` pattern as `settings.py` (values from `.env` / Vercel env).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -32,11 +32,23 @@ class PayerConfig:
     scope: str
     requires_userinfo: bool
     userinfo_url: str | None
-    """If True, use GET {fhir_base}/Patient?_id=... instead of Patient/{id}."""
+    # If "id_search", use GET {fhir_base}/Patient?_id=... instead of Patient/{id}.
     patient_lookup_mode: PatientLookupMode
+    # Normalized resource types (auth_views._normalize_fhir_resource_type); never proxied — empty Bundle returned.
+    fhir_unsupported_resources: frozenset[str] = field(default_factory=frozenset)
 
 
 DEFAULT_SCOPE = "launch/patient patient/*.read openid fhirUser"
+
+# Cigna Patient Access FHIR does not expose these resource types (OperationOutcome not-supported).
+_CIGNA_FHIR_UNSUPPORTED = frozenset(
+    {
+        "medicationstatement",
+        "medicationdispense",
+        "claim",
+        "claimresponse",
+    }
+)
 
 # Cigna Patient Access — sandbox defaults when optional CIGNA_* URLs are unset.
 # Override all of these for production or if Cigna updates their developer docs:
@@ -67,6 +79,7 @@ def _elevance_payer() -> PayerConfig:
         requires_userinfo=False,
         userinfo_url=None,
         patient_lookup_mode="path",
+        fhir_unsupported_resources=frozenset(),
     )
 
 
@@ -84,6 +97,7 @@ def _cigna_payer() -> PayerConfig:
         requires_userinfo=True,
         userinfo_url=_env("CIGNA_USERINFO_URL", DEFAULT_CIGNA_USERINFO_URL) or DEFAULT_CIGNA_USERINFO_URL,
         patient_lookup_mode="id_search",
+        fhir_unsupported_resources=_CIGNA_FHIR_UNSUPPORTED,
     )
 
 

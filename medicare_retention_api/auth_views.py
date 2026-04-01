@@ -483,6 +483,29 @@ def _bearer_token(request: HttpRequest) -> Optional[str]:
     return auth[len("Bearer ") :].strip() or None
 
 
+def _empty_fhir_search_bundle() -> dict[str, Any]:
+    return {"resourceType": "Bundle", "type": "searchset", "total": 0, "entry": []}
+
+
+def _is_fhir_resource_not_supported_outcome(body: Any) -> bool:
+    """True when payer returns OperationOutcome for an unavailable resource type (e.g. Cigna)."""
+    if not isinstance(body, dict) or body.get("resourceType") != "OperationOutcome":
+        return False
+    issues = body.get("issue")
+    if not isinstance(issues, list):
+        return False
+    for it in issues:
+        if not isinstance(it, dict):
+            continue
+        code = (it.get("code") or "").strip().lower()
+        diag = (it.get("diagnostics") or "") if isinstance(it.get("diagnostics"), str) else ""
+        if code == "not-supported":
+            return True
+        if "resource not available" in diag.lower():
+            return True
+    return False
+
+
 def _unwrap_patient_bundle(data: Any) -> Any:
     """
     Some payers (e.g. Cigna) return a search Bundle for Patient lookups (Patient?_id=...).
@@ -555,7 +578,19 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
     except ValueError as e:
         return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
 
+    rt = _normalize_fhir_resource_type(resource_type)
+    if rt in cfg.fhir_unsupported_resources:
+        return JsonResponse(_empty_fhir_search_bundle(), status=200)
+
     resp = _fhir_get_json(request, url)
+    if resp.status_code == 400:
+        try:
+            err_body: Any = json.loads(resp.content.decode("utf-8"))
+        except Exception:
+            err_body = None
+        if _is_fhir_resource_not_supported_outcome(err_body):
+            return JsonResponse(_empty_fhir_search_bundle(), status=200)
+
     # If we got a successful response, unwrap Patient Bundles for better UI compatibility.
     if _normalize_fhir_resource_type(resource_type) == "patient" and resp.status_code == 200:
         try:
