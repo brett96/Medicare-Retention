@@ -38,6 +38,34 @@ export function summarizeSparseFhirBundleForRag(bundle: AnyObj): string {
       parts.push(
         `Encounter ${res?.id ?? "?"} status=${res?.status ?? "?"} class=${res?.class?.code ?? "—"} period=${res?.period?.start ?? "—"}`
       );
+    } else if (rtype === "MedicationRequest") {
+      const med =
+        res?.medicationCodeableConcept?.text ??
+        res?.medicationCodeableConcept?.coding?.[0]?.display ??
+        res?.medicationReference?.display ??
+        res?.medicationReference?.reference ??
+        "";
+      parts.push(
+        `MedicationRequest ${res?.id ?? "?"} status=${res?.status ?? "?"} intent=${res?.intent ?? "?"} med=${med || "—"} authored=${res?.authoredOn ?? "—"}`
+      );
+    } else if (rtype === "MedicationStatement") {
+      const med =
+        res?.medicationCodeableConcept?.text ??
+        res?.medicationCodeableConcept?.coding?.[0]?.display ??
+        res?.medicationReference?.display ??
+        "";
+      parts.push(
+        `MedicationStatement ${res?.id ?? "?"} status=${res?.status ?? "?"} med=${med || "—"}`
+      );
+    } else if (rtype === "MedicationDispense") {
+      const med =
+        res?.medicationCodeableConcept?.text ??
+        res?.medicationCodeableConcept?.coding?.[0]?.display ??
+        res?.medicationReference?.display ??
+        "";
+      parts.push(
+        `MedicationDispense ${res?.id ?? "?"} status=${res?.status ?? "?"} med=${med || "—"} when=${res?.whenHandedOver ?? res?.whenPrepared ?? "—"}`
+      );
     }
   }
   return parts.join("\n").slice(0, 12_000);

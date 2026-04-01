@@ -8,9 +8,13 @@ import {
   formatFhirTelecom,
   parseJwtPayload,
   stringifyJson,
+  summarizeClaimLines,
   summarizeCoverageLines,
   summarizeEobBlocks,
   summarizeEncounterLines,
+  summarizeMedicationDispenseLines,
+  summarizeMedicationRequestLines,
+  summarizeMedicationStatementLines,
 } from "../utils/fhirDisplay";
 
 function getQueryParamFromUrl(url: string, key: string): string | null {
@@ -97,6 +101,10 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
   const [coverageBundle, setCoverageBundle] = useState<any>(null);
   const [encounterBundle, setEncounterBundle] = useState<any>(null);
   const [eobBundle, setEobBundle] = useState<any>(null);
+  const [medicationRequestBundle, setMedicationRequestBundle] = useState<any>(null);
+  const [medicationStatementBundle, setMedicationStatementBundle] = useState<any>(null);
+  const [medicationDispenseBundle, setMedicationDispenseBundle] = useState<any>(null);
+  const [claimBundle, setClaimBundle] = useState<any>(null);
   const [resourceErrors, setResourceErrors] = useState<Record<string, string>>({});
   const [idTokenClaims, setIdTokenClaims] = useState<Record<string, unknown> | null>(null);
   const [showDebug, setShowDebug] = useState(false);
@@ -111,6 +119,10 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
       setCoverageBundle(null);
       setEncounterBundle(null);
       setEobBundle(null);
+      setMedicationRequestBundle(null);
+      setMedicationStatementBundle(null);
+      setMedicationDispenseBundle(null);
+      setClaimBundle(null);
       setIdTokenClaims(null);
       setStatus("Exchanging one-time code for token...");
 
@@ -176,6 +188,38 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         if (enc.ok) setEncounterBundle(enc.data);
         else errs.encounter = summarizeFhirError(enc);
 
+        setStatus("Loading MedicationRequest (prescriptions)…");
+        const mr = await fetchFhirJson(
+          apiBase,
+          `/api/fhir/${payerSeg}/MedicationRequest/${q}`,
+          token
+        );
+        if (mr.ok) setMedicationRequestBundle(mr.data);
+        else errs.medicationRequest = summarizeFhirError(mr);
+
+        setStatus("Loading MedicationStatement…");
+        const ms = await fetchFhirJson(
+          apiBase,
+          `/api/fhir/${payerSeg}/MedicationStatement/${q}`,
+          token
+        );
+        if (ms.ok) setMedicationStatementBundle(ms.data);
+        else errs.medicationStatement = summarizeFhirError(ms);
+
+        setStatus("Loading MedicationDispense…");
+        const md = await fetchFhirJson(
+          apiBase,
+          `/api/fhir/${payerSeg}/MedicationDispense/${q}`,
+          token
+        );
+        if (md.ok) setMedicationDispenseBundle(md.data);
+        else errs.medicationDispense = summarizeFhirError(md);
+
+        setStatus("Loading Claim…");
+        const cl = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Claim/${q}`, token);
+        if (cl.ok) setClaimBundle(cl.data);
+        else errs.claim = summarizeFhirError(cl);
+
         if (Object.keys(errs).length) setResourceErrors(errs);
         setStatus("Done.");
       } catch (e: any) {
@@ -209,6 +253,19 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
   const eobLines = useMemo(() => summarizeEobBlocks(eobBundle, 25), [eobBundle]);
   const coverageLines = useMemo(() => summarizeCoverageLines(coverageBundle, 15), [coverageBundle]);
   const encounterLines = useMemo(() => summarizeEncounterLines(encounterBundle, 15), [encounterBundle]);
+  const medicationRequestLines = useMemo(
+    () => summarizeMedicationRequestLines(medicationRequestBundle, 20),
+    [medicationRequestBundle]
+  );
+  const medicationStatementLines = useMemo(
+    () => summarizeMedicationStatementLines(medicationStatementBundle, 20),
+    [medicationStatementBundle]
+  );
+  const medicationDispenseLines = useMemo(
+    () => summarizeMedicationDispenseLines(medicationDispenseBundle, 20),
+    [medicationDispenseBundle]
+  );
+  const claimLines = useMemo(() => summarizeClaimLines(claimBundle, 15), [claimBundle]);
 
   const copy = useCallback(async () => {
     if (!code) return;
@@ -366,6 +423,85 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
             )}
           </View>
 
+          <View style={{ ...card, ...webShadow }}>
+            <Text style={h2}>Prescriptions (MedicationRequest)</Text>
+            <Text style={{ ...muted, marginBottom: 8 }}>
+              FHIR orders for medication; pharmacy benefit detail may also appear on EOB or Claim depending on the payer.
+            </Text>
+            {medicationRequestBundle ? (
+              <>
+                <Text style={{ ...muted, marginBottom: 10 }}>
+                  {bundleEntryCount(medicationRequestBundle)} MedicationRequest(s)
+                  {typeof medicationRequestBundle.total === "number"
+                    ? ` · reported total: ${medicationRequestBundle.total}`
+                    : ""}
+                </Text>
+                {medicationRequestLines.length ? (
+                  medicationRequestLines.map((line, i) => (
+                    <Text key={i} style={{ ...muted, marginBottom: 6, fontFamily: mono, fontSize: 12 }}>
+                      {line}
+                    </Text>
+                  ))
+                ) : (
+                  <Text style={muted}>No MedicationRequest entries (endpoint may be omitted in this payer sandbox).</Text>
+                )}
+              </>
+            ) : (
+              <Text style={muted}>{exchangeBusy ? "Loading…" : "Not loaded."}</Text>
+            )}
+          </View>
+
+          <View style={{ ...card, ...webShadow }}>
+            <Text style={h2}>MedicationStatement</Text>
+            {medicationStatementBundle ? (
+              medicationStatementLines.length ? (
+                medicationStatementLines.map((line, i) => (
+                  <Text key={i} style={{ ...muted, marginBottom: 6, fontFamily: mono, fontSize: 12 }}>
+                    {line}
+                  </Text>
+                ))
+              ) : (
+                <Text style={muted}>No MedicationStatement entries.</Text>
+              )
+            ) : (
+              <Text style={muted}>{exchangeBusy ? "Loading…" : "Not loaded."}</Text>
+            )}
+          </View>
+
+          <View style={{ ...card, ...webShadow }}>
+            <Text style={h2}>MedicationDispense</Text>
+            {medicationDispenseBundle ? (
+              medicationDispenseLines.length ? (
+                medicationDispenseLines.map((line, i) => (
+                  <Text key={i} style={{ ...muted, marginBottom: 6, fontFamily: mono, fontSize: 12 }}>
+                    {line}
+                  </Text>
+                ))
+              ) : (
+                <Text style={muted}>No MedicationDispense entries.</Text>
+              )
+            ) : (
+              <Text style={muted}>{exchangeBusy ? "Loading…" : "Not loaded."}</Text>
+            )}
+          </View>
+
+          <View style={{ ...card, ...webShadow }}>
+            <Text style={h2}>Claim (FHIR)</Text>
+            {claimBundle ? (
+              claimLines.length ? (
+                claimLines.map((line, i) => (
+                  <Text key={i} style={{ ...muted, marginBottom: 6, fontFamily: mono, fontSize: 12 }}>
+                    {line}
+                  </Text>
+                ))
+              ) : (
+                <Text style={muted}>No Claim entries (many payers surface pharmacy via EOB only).</Text>
+              )
+            ) : (
+              <Text style={muted}>{exchangeBusy ? "Loading…" : "Not loaded."}</Text>
+            )}
+          </View>
+
           {Object.keys(resourceErrors).length ? (
             <View style={{ ...card, borderColor: "#f5c6cb", backgroundColor: "#fff5f5" }}>
               <Text style={{ ...h2, color: "#721c24" }}>Could not load some data</Text>
@@ -476,6 +612,30 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
                 <Text style={{ fontFamily: mono, fontSize: 10 }}>
                   EOB{"\n"}
                   {stringifyJson(eobBundle)}
+                </Text>
+              ) : null}
+              {medicationRequestBundle ? (
+                <Text style={{ fontFamily: mono, fontSize: 10, marginBottom: 10 }}>
+                  MedicationRequest{"\n"}
+                  {stringifyJson(medicationRequestBundle)}
+                </Text>
+              ) : null}
+              {medicationStatementBundle ? (
+                <Text style={{ fontFamily: mono, fontSize: 10, marginBottom: 10 }}>
+                  MedicationStatement{"\n"}
+                  {stringifyJson(medicationStatementBundle)}
+                </Text>
+              ) : null}
+              {medicationDispenseBundle ? (
+                <Text style={{ fontFamily: mono, fontSize: 10, marginBottom: 10 }}>
+                  MedicationDispense{"\n"}
+                  {stringifyJson(medicationDispenseBundle)}
+                </Text>
+              ) : null}
+              {claimBundle ? (
+                <Text style={{ fontFamily: mono, fontSize: 10 }}>
+                  Claim{"\n"}
+                  {stringifyJson(claimBundle)}
                 </Text>
               ) : null}
             </View>

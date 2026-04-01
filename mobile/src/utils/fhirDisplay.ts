@@ -143,3 +143,90 @@ export function summarizeEobBlocks(bundle: unknown, max = 20): string[] {
   }
   return out;
 }
+
+/** Medication display from R4 MedicationRequest.medication[x] or similar. */
+function medicationSummary(resource: any): string {
+  const m = resource?.medicationCodeableConcept;
+  if (m && typeof m === "object") {
+    const t = codingDisplay(m);
+    if (t) return t;
+    if (typeof m.text === "string" && m.text.trim()) return m.text.trim();
+  }
+  const ref = resource?.medicationReference;
+  if (ref && typeof ref === "object") {
+    const d = ref.display || ref.reference;
+    if (typeof d === "string" && d.trim()) return d.trim();
+  }
+  return "";
+}
+
+/** One line per MedicationRequest in a search Bundle (prescription / order data). */
+export function summarizeMedicationRequestLines(bundle: unknown, max = 20): string[] {
+  const b = bundle as { entry?: Array<{ resource?: unknown }> };
+  if (!Array.isArray(b?.entry)) return [];
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(b.entry?.length ?? 0, max); i++) {
+    const r = b.entry?.[i]?.resource as any;
+    if (!r || r?.resourceType !== "MedicationRequest") continue;
+    const med = medicationSummary(r);
+    const status = r?.status ?? "?";
+    const intent = r?.intent ?? "?";
+    const authored = r?.authoredOn ?? "";
+    const id = r?.id ?? "?";
+    out.push(
+      `#${i + 1}  id ${id}  ${status} / ${intent}${authored ? `  authored ${authored}` : ""}${med ? `  ${med}` : ""}`
+    );
+  }
+  return out;
+}
+
+/** One line per MedicationStatement (reported / active medication list). */
+export function summarizeMedicationStatementLines(bundle: unknown, max = 20): string[] {
+  const b = bundle as { entry?: Array<{ resource?: unknown }> };
+  if (!Array.isArray(b?.entry)) return [];
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(b.entry?.length ?? 0, max); i++) {
+    const r = b.entry?.[i]?.resource as any;
+    if (!r || r?.resourceType !== "MedicationStatement") continue;
+    const med = medicationSummary(r);
+    const status = r?.status ?? "?";
+    const id = r?.id ?? "?";
+    const eff = r?.effectiveDateTime || r?.effectivePeriod?.start || "";
+    out.push(`#${i + 1}  id ${id}  ${status}${eff ? `  ${eff}` : ""}${med ? `  ${med}` : ""}`);
+  }
+  return out;
+}
+
+/** One line per MedicationDispense (fills tied to prescriptions when present). */
+export function summarizeMedicationDispenseLines(bundle: unknown, max = 20): string[] {
+  const b = bundle as { entry?: Array<{ resource?: unknown }> };
+  if (!Array.isArray(b?.entry)) return [];
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(b.entry?.length ?? 0, max); i++) {
+    const r = b.entry?.[i]?.resource as any;
+    if (!r || r?.resourceType !== "MedicationDispense") continue;
+    const med = medicationSummary(r);
+    const status = r?.status ?? "?";
+    const id = r?.id ?? "?";
+    const when = r?.whenHandedOver || r?.whenPrepared || "";
+    out.push(`#${i + 1}  id ${id}  ${status}${when ? `  ${when}` : ""}${med ? `  ${med}` : ""}`);
+  }
+  return out;
+}
+
+/** One line per Claim (when payer exposes FHIR Claim; may overlap with EOB for pharmacy/professional). */
+export function summarizeClaimLines(bundle: unknown, max = 15): string[] {
+  const b = bundle as { entry?: Array<{ resource?: unknown }> };
+  if (!Array.isArray(b?.entry)) return [];
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(b.entry?.length ?? 0, max); i++) {
+    const r = b.entry?.[i]?.resource as any;
+    if (!r || r?.resourceType !== "Claim") continue;
+    const id = r?.id ?? "?";
+    const status = r?.status ?? "?";
+    const use = r?.use ?? "";
+    const type = codingDisplay(r?.type ?? {});
+    out.push(`#${i + 1}  id ${id}  ${status}${use ? `  use ${use}` : ""}${type ? `  type ${type}` : ""}`);
+  }
+  return out;
+}

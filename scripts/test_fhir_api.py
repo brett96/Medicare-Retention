@@ -305,6 +305,35 @@ def fetch_eob(cfg: PayerTestConfig, *, access_token: str, patient_id: str) -> Di
     return data
 
 
+def fetch_fhir_bundle(
+    cfg: PayerTestConfig,
+    *,
+    access_token: str,
+    patient_id: str,
+    resource_path: str,
+    label: str,
+) -> Optional[Dict[str, Any]]:
+    """GET {base}/{resource_path}?patient=... — logs non-200 as warning, returns None."""
+    url = f"{cfg.fhir_base_url.rstrip('/')}/{resource_path}?patient={urllib.parse.quote(patient_id)}"
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/fhir+json"}
+    resp = requests.get(url, headers=headers, timeout=_http_timeout())
+    if resp.status_code != 200:
+        print(
+            f"[WARN] FHIR {label} HTTP {resp.status_code} (may be unsupported in this environment):\n{resp.text[:800]}",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        print(f"[WARN] {label} response not JSON:\n{resp.text[:500]}", file=sys.stderr)
+        return None
+    if isinstance(data, dict):
+        return data
+    print(f"[WARN] {label} JSON was not an object.", file=sys.stderr)
+    return None
+
+
 def _interactive_payer_choice() -> str:
     print("\nSelect payer to test:")
     print("  1) Elevance")
@@ -409,6 +438,24 @@ def main() -> int:
             return 6
         print("[SUCCESS] FHIR EOB retrieved.")
         print(_pretty(eob))
+
+        print("\n[STEP 4] Optional: MedicationRequest / MedicationStatement / MedicationDispense / Claim …")
+        for path, label in (
+            ("MedicationRequest", "MedicationRequest"),
+            ("MedicationStatement", "MedicationStatement"),
+            ("MedicationDispense", "MedicationDispense"),
+            ("Claim", "Claim"),
+        ):
+            bundle = fetch_fhir_bundle(
+                cfg,
+                access_token=str(access_token),
+                patient_id=patient_id,
+                resource_path=path,
+                label=label,
+            )
+            if bundle is not None:
+                print(f"\n--- {label} (HTTP 200) ---")
+                print(_pretty(bundle))
     else:
         print("\n[SKIP] No patient id — FHIR request not sent.")
 

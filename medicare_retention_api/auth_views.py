@@ -226,6 +226,12 @@ def _normalize_fhir_resource_type(segment: str) -> str:
     aliases = {
         "eob": "explanationofbenefit",
         "explanation-of-benefit": "explanationofbenefit",
+        # Prescriptions / meds (FHIR R4 names; see https://hl7.org/fhir/medicationrequest.html )
+        "rx": "medicationrequest",
+        "med": "medicationrequest",
+        "prescription": "medicationrequest",
+        "meds": "medicationrequest",
+        "medication": "medicationrequest",
     }
     return aliases.get(s, s)
 
@@ -244,6 +250,18 @@ def _fhir_resource_url(cfg: PayerConfig, resource_type: str, patient_id: str) ->
         return f"{base}/Encounter?patient={pid}"
     if rt == "explanationofbenefit":
         return f"{base}/ExplanationOfBenefit?patient={pid}"
+    # Patient-compartment medication & related claim data (Elevance payer-access FHIR exposes
+    # a subset per their CapabilityStatement; search may return empty Bundle if not supported.)
+    if rt == "medicationrequest":
+        return f"{base}/MedicationRequest?patient={pid}"
+    if rt == "medicationstatement":
+        return f"{base}/MedicationStatement?patient={pid}"
+    if rt == "medicationdispense":
+        return f"{base}/MedicationDispense?patient={pid}"
+    if rt == "claim":
+        return f"{base}/Claim?patient={pid}"
+    if rt == "claimresponse":
+        return f"{base}/ClaimResponse?patient={pid}"
     raise ValueError(f"Unsupported resource type: {resource_type!r}")
 
 
@@ -567,6 +585,26 @@ def proxy_encounter(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET"])
 def proxy_eob(request: HttpRequest) -> HttpResponse:
     return proxy_fhir(request, "elevance", "explanationofbenefit")
+
+
+@require_http_methods(["GET"])
+def proxy_medication_request(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "medicationrequest")
+
+
+@require_http_methods(["GET"])
+def proxy_medication_statement(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "medicationstatement")
+
+
+@require_http_methods(["GET"])
+def proxy_medication_dispense(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "medicationdispense")
+
+
+@require_http_methods(["GET"])
+def proxy_claim(request: HttpRequest) -> HttpResponse:
+    return proxy_fhir(request, "elevance", "claim")
 
 
 @require_http_methods(["GET"])
