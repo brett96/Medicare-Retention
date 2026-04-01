@@ -30,9 +30,7 @@ function getQueryParamFromUrl(url: string, key: string): string | null {
 type FhirFetchResult = { ok: boolean; status: number; data: unknown };
 
 /**
- * Token may carry a member/synthetic id (e.g. A000…) while FHIR compartment data is keyed by
- * the server’s Patient.id (e.g. evi-*, esi-*, gov-*). Always prefer returned Patient.id for
- * Coverage/EOB/etc., including Cigna.
+ * Non-Cigna: prefer FHIR Patient.id from the Patient response for compartment reads.
  */
 function compartmentPatientQueryParam(
   tokenPatientId: string,
@@ -43,6 +41,24 @@ function compartmentPatientQueryParam(
     return encodeURIComponent(p.id.trim());
   }
   return encodeURIComponent(tokenPatientId);
+}
+
+/**
+ * Cigna: compartment data may be indexed under FHIR Patient.id (e.g. evi-*) and/or the token
+ * synthetic id (e.g. A000…). Primary query uses Patient.id; API merges results when
+ * merge_patient_id is the token id.
+ */
+function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown): string {
+  const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
+  const tok = tokenPatientId.trim();
+  if (p?.resourceType !== "Patient" || typeof p.id !== "string" || !p.id.trim()) {
+    return `?patient_id=${encodeURIComponent(tok)}`;
+  }
+  const fid = p.id.trim();
+  if (!tok || fid === tok) {
+    return `?patient_id=${encodeURIComponent(fid)}`;
+  }
+  return `?patient_id=${encodeURIComponent(fid)}&merge_patient_id=${encodeURIComponent(tok)}`;
 }
 
 async function fetchFhirJson(
@@ -188,7 +204,10 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         if (pat.ok) setPatientResource(pat.data);
         else errs.patient = summarizeFhirError(pat);
 
-        const compartmentQ = `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
+        const compartmentQ =
+          payerId === "cigna"
+            ? cignaCompartmentQuery(patientId, pat.ok ? pat.data : null)
+            : `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
 
         setStatus("Loading Coverage…");
         const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${compartmentQ}`, token);
