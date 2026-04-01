@@ -40,6 +40,13 @@ class PayerConfig:
 
 DEFAULT_SCOPE = "launch/patient patient/*.read openid fhirUser"
 
+# Elevance TotalView: MedicationStatement is not in the sandbox supported resource list (invalid_scope if called).
+_ELEVANCE_FHIR_UNSUPPORTED = frozenset(
+    {
+        "medicationstatement",
+    }
+)
+
 # Cigna Patient Access FHIR does not expose these resource types (OperationOutcome not-supported).
 _CIGNA_FHIR_UNSUPPORTED = frozenset(
     {
