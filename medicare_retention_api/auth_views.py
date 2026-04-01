@@ -22,6 +22,7 @@ from gateway.models import PkceSession, TokenExchangeCode
 from medicare_retention_api.payers import (
     PLANNED_PAYER_ROWS,
     PayerConfig,
+    build_oauth_authorize_query_string,
     get_payer_config,
     list_picker_payer_rows,
 )
@@ -377,7 +378,7 @@ def oauth_authorize(request: HttpRequest, payer_id: str) -> HttpResponse:
     )
 
     aud = cfg.oauth_audience if cfg.oauth_audience else cfg.fhir_base_url
-    params = {
+    params: dict[str, str] = {
         "response_type": "code",
         "client_id": cfg.client_id,
         "redirect_uri": cfg.redirect_uri,
@@ -387,7 +388,12 @@ def oauth_authorize(request: HttpRequest, payer_id: str) -> HttpResponse:
         "code_challenge_method": "S256",
         "aud": aud,
     }
-    url = f"{cfg.auth_url}?{urllib.parse.urlencode(params)}"
+    if cfg.oauth_app_name:
+        params["appname"] = cfg.oauth_app_name
+    q = build_oauth_authorize_query_string(
+        params, scope_literal_asterisk=cfg.oauth_scope_literal_asterisk
+    )
+    url = f"{cfg.auth_url}?{q}"
     return redirect(url)
 
 
@@ -557,17 +563,24 @@ def oauth_debug_config(request: HttpRequest) -> HttpResponse:
         return JsonResponse({"error": "unknown_payer", "payer_id": payer_id}, status=404)
     except Exception as e:
         return JsonResponse({"error": "payer_config_error", "detail": str(e)}, status=500)
-    return JsonResponse(
-        {
-            "payer_id": cfg.payer_id,
-            "redirect_uri": cfg.redirect_uri,
-            "authorize_url": cfg.auth_url,
-            "client_id": cfg.client_id,
-            "oauth_audience": cfg.oauth_audience or cfg.fhir_base_url,
-            "requires_userinfo": cfg.requires_userinfo,
-            "hint": "Register redirect_uri EXACTLY in the payer developer portal (scheme, host, path, trailing slash).",
-        }
-    )
+    payload: dict[str, Any] = {
+        "payer_id": cfg.payer_id,
+        "redirect_uri": cfg.redirect_uri,
+        "authorize_url": cfg.auth_url,
+        "client_id": cfg.client_id,
+        "oauth_audience": cfg.oauth_audience or cfg.fhir_base_url,
+        "oauth_scope_literal_asterisk": cfg.oauth_scope_literal_asterisk,
+        "oauth_app_name_set": bool(cfg.oauth_app_name),
+        "requires_userinfo": cfg.requires_userinfo,
+        "hint": "Register redirect_uri EXACTLY in the payer developer portal (scheme, host, path, trailing slash).",
+    }
+    if cfg.payer_id == "aetna":
+        payload["aetna_checklist"] = (
+            "Sandbox: subscribe to Patient Access FHIR products, click Create Application for credentials, "
+            "and register the same redirect URI in the portal. If the login page shows only the text null, "
+            "try setting AETNA_APP_NAME to the App Name from the portal and retry."
+        )
+    return JsonResponse(payload)
 
 
 def _bearer_token(request: HttpRequest) -> Optional[str]:

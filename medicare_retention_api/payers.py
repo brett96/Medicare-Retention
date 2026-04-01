@@ -7,6 +7,7 @@ Uses the same `_env` pattern as `settings.py` (values from `.env` / Vercel env).
 from __future__ import annotations
 
 import os
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -38,6 +39,10 @@ class PayerConfig:
     fhir_unsupported_resources: frozenset[str] = field(default_factory=frozenset)
     # SMART authorize `aud` when it differs from FHIR API base (e.g. Aetna: aud = …/fhirdemo, FHIR = …/v2/patientaccess).
     oauth_audience: str | None = None
+    # Aetna login UI can break if `scope` encodes `*` as %2A; keep literal * in the query string.
+    oauth_scope_literal_asterisk: bool = False
+    # Optional portal “App name” sent as authorize param `appname` (Aetna).
+    oauth_app_name: str | None = None
 
 
 DEFAULT_SCOPE = "launch/patient patient/*.read openid fhirUser"
@@ -139,6 +144,8 @@ def _aetna_payer() -> PayerConfig:
         patient_lookup_mode="path",
         fhir_unsupported_resources=_AETNA_FHIR_UNSUPPORTED,
         oauth_audience=aud,
+        oauth_scope_literal_asterisk=True,
+        oauth_app_name=_env("AETNA_APP_NAME"),
     )
 
 

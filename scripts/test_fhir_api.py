@@ -24,13 +24,32 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import requests
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 try:
     from dotenv import load_dotenv
 
-    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
     load_dotenv(_PROJECT_ROOT / ".env")
 except ImportError:
     pass
+_pr = str(_PROJECT_ROOT)
+if _pr not in sys.path:
+    sys.path.insert(0, _pr)
+try:
+    from medicare_retention_api.payers import build_oauth_authorize_query_string
+except ImportError:  # pragma: no cover
+
+    def build_oauth_authorize_query_string(
+        params: dict[str, str], *, scope_literal_asterisk: bool = False
+    ) -> str:
+        parts: list[str] = []
+        for key, val in params.items():
+            k = urllib.parse.quote(key, safe="")
+            if key == "scope" and scope_literal_asterisk:
+                v = urllib.parse.quote(val, safe="*")
+            else:
+                v = urllib.parse.quote(val, safe="")
+            parts.append(f"{k}={v}")
+        return "&".join(parts)
 
 
 DEFAULT_SCOPE = "launch/patient patient/*.read openid fhirUser"
@@ -74,6 +93,8 @@ class PayerTestConfig:
     userinfo_url: Optional[str]
     # SMART authorize `aud` when different from FHIR base (Aetna).
     oauth_audience: Optional[str] = None
+    oauth_scope_literal_asterisk: bool = False
+    oauth_app_name: Optional[str] = None
 
 
 def _require(name: str) -> str:
@@ -117,6 +138,8 @@ def load_aetna_config() -> PayerTestConfig:
         requires_userinfo=bool(userinfo),
         userinfo_url=userinfo,
         oauth_audience=_env("AETNA_AUD", default_aud) or default_aud,
+        oauth_scope_literal_asterisk=True,
+        oauth_app_name=_env("AETNA_APP_NAME"),
     )
 
 
@@ -149,7 +172,8 @@ def generate_pkce_pair() -> Tuple[str, str]:
 
 
 def build_authorize_url(cfg: PayerTestConfig, code_challenge: str, state: str) -> str:
-    params = {
+    aud = cfg.oauth_audience if cfg.oauth_audience else cfg.fhir_base_url
+    params: dict[str, str] = {
         "response_type": "code",
         "client_id": cfg.client_id,
         "redirect_uri": cfg.redirect_uri,
@@ -157,9 +181,14 @@ def build_authorize_url(cfg: PayerTestConfig, code_challenge: str, state: str) -
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
-        "aud": cfg.fhir_base_url,
+        "aud": aud,
     }
-    return f"{cfg.auth_url}?{urllib.parse.urlencode(params)}"
+    if cfg.oauth_app_name:
+        params["appname"] = cfg.oauth_app_name
+    q = build_oauth_authorize_query_string(
+        params, scope_literal_asterisk=cfg.oauth_scope_literal_asterisk
+    )
+    return f"{cfg.auth_url}?{q}"
 
 
 def prompt_redirected_url() -> str:
