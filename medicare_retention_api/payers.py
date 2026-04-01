@@ -74,9 +74,16 @@ _ELEVANCE_FHIR_UNSUPPORTED = frozenset(
     }
 )
 
-# Cigna: do not short-circuit to an empty Bundle — always proxy to the payer so pharmacy EOB / Rx
-# and related resources return real payloads (matches pre–multi-payer auth_views behavior).
-_CIGNA_FHIR_UNSUPPORTED: frozenset[str] = frozenset()
+# Cigna returns OperationOutcome 400 for these compartment reads ("Resource not available: …").
+# Proxy serves an empty search Bundle (200) so the handoff UI does not show errors; use EOB / MedicationRequest for Rx.
+_CIGNA_FHIR_UNSUPPORTED = frozenset(
+    {
+        "medicationstatement",
+        "medicationdispense",
+        "claim",
+        "claimresponse",
+    }
+)
 
 # Cigna Patient Access — sandbox defaults when optional CIGNA_* URLs are unset.
 # Override all of these for production or if Cigna updates their developer docs:

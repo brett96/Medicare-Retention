@@ -878,10 +878,12 @@ def _proxy_fhir_cigna_legacy(
 ) -> HttpResponse:
     """
     Match older Cigna integration: single GET, no &_count, no Bundle pagination merge,
-    no dual-patient merge, no mapping OperationOutcome to an empty Bundle.
-    Only extra step: unwrap Patient search Bundle (prefer gov-*).
+    no dual-patient merge. Types in cfg.fhir_unsupported_resources return an empty Bundle (200)
+    so Cigna is not called for resources it rejects with not-supported. Patient: unwrap Bundle (gov-*).
     """
     rt = _normalize_fhir_resource_type(resource_type)
+    if rt in cfg.fhir_unsupported_resources:
+        return JsonResponse(_empty_fhir_search_bundle(), status=200)
     try:
         url = _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
     except ValueError as e:
@@ -935,7 +937,7 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
     if not patient_id:
         return JsonResponse({"error": "missing_patient_id"}, status=400)
 
-    if cfg.payer_id == "cigna" and _env("CIGNA_LEGACY_FHIR_PROXY", "1") == "1":
+    if cfg.payer_id == "cigna" and _env("CIGNA_LEGACY_FHIR_PROXY", "0") == "1":
         return _proxy_fhir_cigna_legacy(request, cfg, resource_type, patient_id)
 
     try:
