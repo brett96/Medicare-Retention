@@ -344,14 +344,16 @@ def _cigna_fhir_userinfo_url(cfg: PayerConfig) -> str:
     return f"{cfg.fhir_base_url.rstrip('/')}/$userinfo"
 
 
-def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
+def _cigna_discover_enterprise_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
+    """
+    Synthetic enterprise / SMART id (e.g. A000…) — keys EOB, pharmacy, Coverage in Cigna sandbox.
+    OAuth userinfo + token only; never FHIR $userinfo (that returns clinical gov-/evi- ids).
+    """
     access = token.get("access_token")
     if not access or not isinstance(access, str):
         return None
     at = access.strip()
 
-    # SMART token response `patient` (e.g. synthetic enterprise A000…) keys EOB/Coverage in sandbox
-    # captures (Parsed API Results — Cigna syntheticuser01); FHIR $userinfo may return evi-/gov- only.
     for key in ("patient", "patient_id"):
         raw = token.get(key)
         if raw is not None:
@@ -362,28 +364,6 @@ def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optio
     ent = _cigna_enterprise_id_from_id_token(token)
     if ent:
         return ent
-
-    try:
-        resp = requests.get(
-            _cigna_fhir_userinfo_url(cfg),
-            headers={
-                "Authorization": f"Bearer {at}",
-                "Accept": "application/fhir+json, application/json",
-            },
-            timeout=_http_timeout(),
-        )
-    except requests.RequestException:
-        pass
-    else:
-        if resp.status_code == 200:
-            try:
-                body: Any = resp.json()
-            except ValueError:
-                body = None
-            if isinstance(body, dict):
-                pid = _patient_id_from_cigna_fhir_userinfo_body(body)
-                if pid and _cigna_acceptable_patient_local_id(pid):
-                    return pid
 
     if cfg.userinfo_url:
         try:
@@ -407,6 +387,65 @@ def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optio
     jid = _patient_id_from_access_token_jwt(at)
     if jid and _cigna_acceptable_patient_local_id(jid):
         return jid
+    return None
+
+
+def _cigna_discover_clinical_patient_id_from_fhir_userinfo(
+    token: Dict[str, Any], cfg: PayerConfig
+) -> Optional[str]:
+    """FHIR $userinfo clinical id (gov- / evi- / esi-); not used for EOB compartment alone."""
+    access = token.get("access_token")
+    if not access or not isinstance(access, str):
+        return None
+    at = access.strip()
+    try:
+        resp = requests.get(
+            _cigna_fhir_userinfo_url(cfg),
+            headers={
+                "Authorization": f"Bearer {at}",
+                "Accept": "application/fhir+json, application/json",
+            },
+            timeout=_http_timeout(),
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        body: Any = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    pid = _patient_id_from_cigna_fhir_userinfo_body(body)
+    if pid and _cigna_acceptable_patient_local_id(pid):
+        return pid
+    return None
+
+
+def _discover_cigna_dual_patient_ids(
+    token: Dict[str, Any], cfg: PayerConfig
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Returns (clinical_id, enterprise_id) for Cigna sandbox dual-id model.
+    When both resolve to the same string, returns (None, that_id) for single-id handoff.
+    """
+    enterprise = _cigna_discover_enterprise_patient_id(token, cfg)
+    clinical = _cigna_discover_clinical_patient_id_from_fhir_userinfo(token, cfg)
+    es = enterprise.strip() if enterprise else ""
+    cs = clinical.strip() if clinical else ""
+    if es and cs and es == cs:
+        return (None, es)
+    return (clinical, enterprise)
+
+
+def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
+    """Single id for non-handoff callers: prefer clinical, else enterprise."""
+    clinical, enterprise = _discover_cigna_dual_patient_ids(token, cfg)
+    if clinical and str(clinical).strip():
+        return str(clinical).strip()
+    if enterprise and str(enterprise).strip():
+        return str(enterprise).strip()
     return None
 
 
@@ -448,12 +487,29 @@ def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[st
 
 
 def _handoff_payload(token: Dict[str, Any], cfg: PayerConfig) -> Dict[str, Any]:
-    patient_id = _discover_patient_id(token, cfg)
     out: Dict[str, Any] = dict(token)
     out["payer_id"] = cfg.payer_id
-    out["patient_id"] = patient_id
-    if patient_id:
-        out.setdefault("patient", patient_id)
+    if cfg.payer_id == "cigna":
+        clinical, enterprise = _discover_cigna_dual_patient_ids(token, cfg)
+        clin_s = clinical.strip() if clinical else ""
+        ent_s = enterprise.strip() if enterprise else ""
+        if clin_s and ent_s and clin_s != ent_s:
+            out["patient_id"] = clin_s
+            out.setdefault("patient", clin_s)
+            out["cigna_merge_patient_id"] = ent_s
+        elif clin_s:
+            out["patient_id"] = clin_s
+            out.setdefault("patient", clin_s)
+        elif ent_s:
+            out["patient_id"] = ent_s
+            out.setdefault("patient", ent_s)
+        else:
+            out["patient_id"] = None
+    else:
+        patient_id = _discover_patient_id(token, cfg)
+        out["patient_id"] = patient_id
+        if patient_id:
+            out.setdefault("patient", patient_id)
     return out
 
 

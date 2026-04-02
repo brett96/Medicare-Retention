@@ -44,21 +44,29 @@ function compartmentPatientQueryParam(
 }
 
 /**
- * Cigna sandbox: EOB/Coverage/Encounter are keyed to the SMART token `patient` id (e.g. A000…)
- * in internal captures (Parsed API Results — syntheticuser01). Use that as the primary
- * compartment query; merge a distinct resolved FHIR Patient.id (evi- / gov- / esi-) when present.
+ * Cigna sandbox dual-id: clinical (FHIR $userinfo, gov-/evi-/esi-) vs enterprise (A000…, EOB/claims).
+ * Handoff sends `patient_id` (clinical when both exist) and `cigna_merge_patient_id` (enterprise).
+ * Proxy merges both compartment legs for mergeable resources.
  */
-function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown): string {
+function cignaCompartmentQuery(
+  handoffPatientId: string,
+  handoffMergePatientId: string | undefined,
+  patientPayload: unknown
+): string {
+  const primary = handoffPatientId.trim();
+  const explicitMerge = (handoffMergePatientId || "").trim();
+  if (explicitMerge && explicitMerge !== primary) {
+    return `?patient_id=${encodeURIComponent(primary)}&merge_patient_id=${encodeURIComponent(explicitMerge)}`;
+  }
   const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
-  const tok = tokenPatientId.trim();
   if (p?.resourceType !== "Patient" || typeof p.id !== "string" || !p.id.trim()) {
-    return `?patient_id=${encodeURIComponent(tok)}`;
+    return `?patient_id=${encodeURIComponent(primary)}`;
   }
   const fid = p.id.trim();
-  if (!tok || fid === tok) {
+  if (!primary || fid === primary) {
     return `?patient_id=${encodeURIComponent(fid)}`;
   }
-  return `?patient_id=${encodeURIComponent(tok)}&merge_patient_id=${encodeURIComponent(fid)}`;
+  return `?patient_id=${encodeURIComponent(primary)}&merge_patient_id=${encodeURIComponent(fid)}`;
 }
 
 async function fetchFhirJson(
@@ -179,6 +187,10 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
           (tokenJson?.patient as string | undefined) ||
           (tokenJson?.patient_id as string | undefined) ||
           "";
+        const cignaMergePatientId =
+          typeof tokenJson?.cigna_merge_patient_id === "string"
+            ? tokenJson.cigna_merge_patient_id.trim()
+            : "";
         const idTok = tokenJson?.id_token;
         if (typeof idTok === "string" && idTok.length > 0) {
           setIdTokenClaims(parseJwtPayload(idTok));
@@ -206,7 +218,11 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
 
         const compartmentQ =
           payerId === "cigna"
-            ? cignaCompartmentQuery(patientId, pat.ok ? pat.data : null)
+            ? cignaCompartmentQuery(
+                patientId,
+                cignaMergePatientId || undefined,
+                pat.ok ? pat.data : null
+              )
             : `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
 
         setStatus("Loading Coverage…");
@@ -614,7 +630,11 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
                 <View style={{ marginBottom: 12 }}>
                   <Text style={{ fontWeight: "600", marginBottom: 4 }}>Token (metadata)</Text>
                   <Text style={{ fontFamily: mono, fontSize: 11 }}>
-                    payer_id {String(tokenPayload.payer_id ?? "—")} · patient_id {String(tokenPayload.patient_id ?? tokenPayload.patient ?? "—")}
+                    payer_id {String(tokenPayload.payer_id ?? "—")} · patient_id{" "}
+                    {String(tokenPayload.patient_id ?? tokenPayload.patient ?? "—")}
+                    {tokenPayload.payer_id === "cigna" && tokenPayload.cigna_merge_patient_id
+                      ? ` · cigna_merge_patient_id ${String(tokenPayload.cigna_merge_patient_id)}`
+                      : ""}
                   </Text>
                   <Text style={{ fontFamily: mono, fontSize: 11 }}>
                     type {String(tokenPayload.token_type)} · expires_in {String(tokenPayload.expires_in)} · scope{" "}
