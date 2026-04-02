@@ -307,6 +307,15 @@ def _cigna_acceptable_patient_local_id(pid: str) -> bool:
     return True
 
 
+def _cigna_is_clinical_style_local_id(pid: str) -> bool:
+    """
+    Sandbox FHIR $userinfo returns gov-/evi-/esi- logical ids (clinical compartment).
+    Token `patient` / access_token JWT sometimes echo those — they must not be treated as enterprise.
+    """
+    s = (pid or "").strip().lower()
+    return s.startswith(("gov-", "evi-", "esi-"))
+
+
 def _patient_id_from_cigna_fhir_userinfo_body(body: Dict[str, Any]) -> Optional[str]:
     """
     Cigna validation doc: GET {FHIR base}/$userinfo (not only OAuth /userinfo).
@@ -358,7 +367,11 @@ def _cigna_discover_enterprise_patient_id(token: Dict[str, Any], cfg: PayerConfi
         raw = token.get(key)
         if raw is not None:
             s = str(raw).strip()
-            if s and _cigna_acceptable_patient_local_id(s):
+            if (
+                s
+                and _cigna_acceptable_patient_local_id(s)
+                and not _cigna_is_clinical_style_local_id(s)
+            ):
                 return s
 
     ent = _cigna_enterprise_id_from_id_token(token)
@@ -381,11 +394,19 @@ def _cigna_discover_enterprise_patient_id(token: Dict[str, Any], cfg: PayerConfi
                 body_o = None
             if resp.status_code == 200 and isinstance(body_o, dict):
                 pid = _patient_id_from_userinfo(body_o)
-                if pid and _cigna_acceptable_patient_local_id(pid):
+                if (
+                    pid
+                    and _cigna_acceptable_patient_local_id(pid)
+                    and not _cigna_is_clinical_style_local_id(pid)
+                ):
                     return pid
 
     jid = _patient_id_from_access_token_jwt(at)
-    if jid and _cigna_acceptable_patient_local_id(jid):
+    if (
+        jid
+        and _cigna_acceptable_patient_local_id(jid)
+        and not _cigna_is_clinical_style_local_id(jid)
+    ):
         return jid
     return None
 
@@ -830,7 +851,14 @@ def _fhir_merge_cigna_dual_patient_bundles(primary: dict[str, Any], secondary: d
 
 
 _CIGNA_MERGEABLE_COMPARTMENT = frozenset(
-    {"explanationofbenefit", "medicationrequest", "coverage", "encounter"}
+    {
+        "explanationofbenefit",
+        "medicationrequest",
+        "coverage",
+        "encounter",
+        "claim",
+        "claimresponse",
+    }
 )
 
 
