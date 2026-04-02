@@ -440,12 +440,12 @@ def _discover_cigna_dual_patient_ids(
 
 
 def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
-    """Single id for non-handoff callers: prefer clinical, else enterprise."""
+    """Single id for non-handoff callers: prefer enterprise (EOB/Coverage key) else clinical."""
     clinical, enterprise = _discover_cigna_dual_patient_ids(token, cfg)
-    if clinical and str(clinical).strip():
-        return str(clinical).strip()
     if enterprise and str(enterprise).strip():
         return str(enterprise).strip()
+    if clinical and str(clinical).strip():
+        return str(clinical).strip()
     return None
 
 
@@ -493,10 +493,12 @@ def _handoff_payload(token: Dict[str, Any], cfg: PayerConfig) -> Dict[str, Any]:
         clinical, enterprise = _discover_cigna_dual_patient_ids(token, cfg)
         clin_s = clinical.strip() if clinical else ""
         ent_s = enterprise.strip() if enterprise else ""
+        # Enterprise id keys EOB/claims (Parsed API Results — syntheticuser01 uses ?patient=A000… bare).
+        # Clinical id (FHIR $userinfo: gov-/evi-/esi-) is the merge leg for compartment union.
         if clin_s and ent_s and clin_s != ent_s:
-            out["patient_id"] = clin_s
-            out.setdefault("patient", clin_s)
-            out["cigna_merge_patient_id"] = ent_s
+            out["patient_id"] = ent_s
+            out.setdefault("patient", ent_s)
+            out["cigna_merge_patient_id"] = clin_s
         elif clin_s:
             out["patient_id"] = clin_s
             out.setdefault("patient", clin_s)
@@ -622,8 +624,11 @@ def _cigna_compartment_search_bundle(
     """
     Run Cigna patient-compartment search, retrying with patient=Patient/{id} when the bare
     logical id returns an empty searchset (server-dependent; bare id works for many esi-* rows).
+    If all attempts are empty, return the *first* bundle so Bundle.link.self matches bare
+    ?patient=… (as in Parsed API Results), not only the Patient/… retry.
     """
     last: dict[str, Any] = _empty_fhir_search_bundle()
+    first_empty: dict[str, Any] | None = None
     for variant in _cigna_patient_search_param_variants(patient_logical_id):
         try:
             url = _fhir_resource_url(cfg, resource_type, variant, with_search_extras=False)
@@ -632,8 +637,10 @@ def _cigna_compartment_search_bundle(
         data = _cigna_fetch_bundle_from_url(cfg, resource_type, url, headers, timeout)
         if _cigna_bundle_has_entries(data):
             return data
+        if first_empty is None:
+            first_empty = data
         last = data
-    return last
+    return first_empty if first_empty is not None else last
 
 
 def _fhir_bundle_next_url(bundle: dict[str, Any]) -> Optional[str]:
@@ -815,7 +822,7 @@ def _fhir_merge_cigna_dual_patient_bundles(primary: dict[str, Any], secondary: d
         {
             "system": "https://medicare-retention.local/fhir-proxy",
             "code": "cigna-dual-patient-merge",
-            "display": "Merged compartment search for Cigna FHIR Patient.id and token/synthetic member id.",
+            "display": "Merged compartment search for Cigna enterprise (EOB/claims) and clinical (FHIR $userinfo) patient ids.",
         }
     )
     meta["tag"] = tags

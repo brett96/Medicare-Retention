@@ -44,8 +44,8 @@ function compartmentPatientQueryParam(
 }
 
 /**
- * Cigna sandbox dual-id: clinical (FHIR $userinfo, gov-/evi-/esi-) vs enterprise (A000…, EOB/claims).
- * Handoff sends `patient_id` (clinical when both exist) and `cigna_merge_patient_id` (enterprise).
+ * Cigna sandbox dual-id: enterprise (A000…, EOB/claims per Parsed API Results) vs clinical (FHIR $userinfo).
+ * Handoff sends `patient_id` = enterprise and `cigna_merge_patient_id` = clinical when both exist.
  * Proxy merges both compartment legs for mergeable resources.
  */
 function cignaCompartmentQuery(
