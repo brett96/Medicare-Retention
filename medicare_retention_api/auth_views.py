@@ -234,9 +234,9 @@ def _exchange_authorization_code(cfg: PayerConfig, *, code: str, code_verifier: 
     return requests.post(cfg.token_url, data=token_payload, headers=headers, timeout=_http_timeout())
 
 
-def _patient_id_from_access_token_jwt(access_token: str) -> Optional[str]:
-    """Decode JWT payload (no signature verify) for SMART `patient` / fhirUser claims (e.g. Aetna)."""
-    parts = access_token.split(".")
+def _jwt_payload_dict(jwt_token: str) -> Optional[Dict[str, Any]]:
+    """Decode JWT payload (no signature verification)."""
+    parts = jwt_token.split(".")
     if len(parts) < 2:
         return None
     payload_b64 = parts[1]
@@ -248,9 +248,33 @@ def _patient_id_from_access_token_jwt(access_token: str) -> Optional[str]:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
         return None
-    if not isinstance(data, dict):
+    return data if isinstance(data, dict) else None
+
+
+def _patient_id_from_access_token_jwt(access_token: str) -> Optional[str]:
+    """Decode JWT payload (no signature verify) for SMART `patient` / fhirUser claims (e.g. Aetna)."""
+    data = _jwt_payload_dict(access_token)
+    if not data:
         return None
     return _patient_id_from_userinfo(data)
+
+
+def _cigna_enterprise_id_from_id_token(token: Dict[str, Any]) -> Optional[str]:
+    """Cigna id_token may carry synthEnterpriseId (sandbox member id used for ?patient= EOB searches)."""
+    id_tok = token.get("id_token")
+    if not isinstance(id_tok, str) or not id_tok.strip():
+        return None
+    data = _jwt_payload_dict(id_tok.strip())
+    if not data:
+        return None
+    for key in ("synthEnterpriseId", "synthSubscriberEnterpriseId"):
+        v = data.get(key)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and _cigna_acceptable_patient_local_id(s):
+            return s
+    return None
 
 
 def _patient_id_from_userinfo(data: Dict[str, Any]) -> Optional[str]:
@@ -326,6 +350,19 @@ def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optio
         return None
     at = access.strip()
 
+    # SMART token response `patient` (e.g. synthetic enterprise A000…) keys EOB/Coverage in sandbox
+    # captures (Parsed API Results — Cigna syntheticuser01); FHIR $userinfo may return evi-/gov- only.
+    for key in ("patient", "patient_id"):
+        raw = token.get(key)
+        if raw is not None:
+            s = str(raw).strip()
+            if s and _cigna_acceptable_patient_local_id(s):
+                return s
+
+    ent = _cigna_enterprise_id_from_id_token(token)
+    if ent:
+        return ent
+
     try:
         resp = requests.get(
             _cigna_fhir_userinfo_url(cfg),
@@ -347,13 +384,6 @@ def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optio
                 pid = _patient_id_from_cigna_fhir_userinfo_body(body)
                 if pid and _cigna_acceptable_patient_local_id(pid):
                     return pid
-
-    for key in ("patient", "patient_id"):
-        raw = token.get(key)
-        if raw is not None:
-            s = str(raw).strip()
-            if s and _cigna_acceptable_patient_local_id(s):
-                return s
 
     if cfg.userinfo_url:
         try:

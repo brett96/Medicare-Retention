@@ -44,9 +44,9 @@ function compartmentPatientQueryParam(
 }
 
 /**
- * Cigna: compartment searches (EOB, Coverage, …) are keyed to FHIR Patient.id (often evi-*).
- * Primary query uses that id; when it differs from the token `patient` claim (e.g. A000…), the
- * API merges a second leg for the token id so both compartments are included.
+ * Cigna sandbox: EOB/Coverage/Encounter are keyed to the SMART token `patient` id (e.g. A000…)
+ * in internal captures (Parsed API Results — syntheticuser01). Use that as the primary
+ * compartment query; merge a distinct resolved FHIR Patient.id (evi- / gov- / esi-) when present.
  */
 function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown): string {
   const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
@@ -58,7 +58,7 @@ function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown):
   if (!tok || fid === tok) {
     return `?patient_id=${encodeURIComponent(fid)}`;
   }
-  return `?patient_id=${encodeURIComponent(fid)}&merge_patient_id=${encodeURIComponent(tok)}`;
+  return `?patient_id=${encodeURIComponent(tok)}&merge_patient_id=${encodeURIComponent(fid)}`;
 }
 
 async function fetchFhirJson(
@@ -421,7 +421,11 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
                     </View>
                   ))
                 ) : (
-                  <Text style={muted}>No EOB entries in the bundle (empty result is normal for some sandboxes).</Text>
+                  <Text style={muted}>
+                    No EOB entries in the bundle (empty result is normal for some sandboxes). For Cigna, confirm
+                    compartment reads use the token <Text style={{ fontWeight: "700" }}>patient</Text> id (e.g. A000…)
+                    as in Parsed API Results; try another synthetic user if this one has no seeded claims.
+                  </Text>
                 )}
               </>
             ) : (
