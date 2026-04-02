@@ -44,9 +44,10 @@ function compartmentPatientQueryParam(
 }
 
 /**
- * Cigna: compartment data may be indexed under FHIR Patient.id (e.g. evi-*) and/or the token
- * synthetic id (e.g. A000…). Primary query uses Patient.id; API merges results when
- * merge_patient_id is the token id.
+ * Cigna: pharmacy and other EOB rows are often compartment-indexed under the SMART launch /
+ * token patient id. Use that as the primary compartment query and merge in a distinct FHIR
+ * Patient.id when the resolved resource id differs (e.g. evi-*), matching retrieved bundles to
+ * Parsed_Cigna_Data-style pharmacy EOB payloads.
  */
 function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown): string {
   const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
@@ -58,7 +59,7 @@ function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown):
   if (!tok || fid === tok) {
     return `?patient_id=${encodeURIComponent(fid)}`;
   }
-  return `?patient_id=${encodeURIComponent(fid)}&merge_patient_id=${encodeURIComponent(tok)}`;
+  return `?patient_id=${encodeURIComponent(tok)}&merge_patient_id=${encodeURIComponent(fid)}`;
 }
 
 async function fetchFhirJson(

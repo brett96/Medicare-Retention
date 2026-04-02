@@ -869,11 +869,15 @@ def _is_fhir_resource_not_supported_outcome(body: Any) -> bool:
     return False
 
 
-def _unwrap_patient_bundle(data: Any) -> Any:
+def _unwrap_patient_bundle(data: Any, requested_patient_id: str | None = None) -> Any:
     """
     Some payers (e.g. Cigna) return a search Bundle for Patient lookups (Patient?_id=...).
-    The UI's patient summary expects a single Patient resource; prefer a gov-* Patient when present
-    because downstream resources (EOB/Coverage/Encounter) commonly reference that id.
+    The UI expects a single Patient resource.
+
+    When ``requested_patient_id`` is set (compartment / SMART launch id), prefer the matching
+    Patient entry so EOB/Coverage reads use the same id Cigna indexes pharmacy EOBs under.
+
+    Otherwise prefer a gov-* Patient when present (legacy behavior for other payers).
     """
     if not isinstance(data, dict) or data.get("resourceType") != "Bundle":
         return data
@@ -891,6 +895,13 @@ def _unwrap_patient_bundle(data: Any) -> Any:
 
     if not patients:
         return data
+
+    req = (requested_patient_id or "").strip()
+    if req:
+        for p in patients:
+            pid = p.get("id")
+            if isinstance(pid, str) and pid.strip() == req:
+                return p
 
     for p in patients:
         pid = p.get("id")
@@ -962,7 +973,7 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
                     payload_c: Any = json.loads(resp_c.content.decode("utf-8"))
                 except Exception:
                     return resp_c
-                payload_c = _unwrap_patient_bundle(payload_c)
+                payload_c = _unwrap_patient_bundle(payload_c, requested_patient_id=patient_id)
                 return JsonResponse(payload_c, status=200, safe=isinstance(payload_c, dict))
             return resp_c
 
@@ -1046,7 +1057,7 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
         payload = _fhir_follow_bundle_next_pages(cfg, payload, headers=hdrs, timeout=_http_timeout())
 
     if rt == "patient":
-        payload = _unwrap_patient_bundle(payload)
+        payload = _unwrap_patient_bundle(payload, requested_patient_id=patient_id)
         return JsonResponse(payload, status=200, safe=isinstance(payload, dict))
 
     return JsonResponse(payload, status=200, safe=isinstance(payload, dict))
