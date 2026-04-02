@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import os
+import re
 import secrets
 import urllib.parse
 from datetime import timedelta
@@ -269,6 +270,116 @@ def _patient_id_from_userinfo(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_CIGNA_SYNTHETIC_LOGIN = re.compile(r"^syntheticuser\d+$", re.IGNORECASE)
+
+
+def _cigna_acceptable_patient_local_id(pid: str) -> bool:
+    """OIDC `sub` is often syntheticuserNN — not valid for ?patient= FHIR searches."""
+    s = (pid or "").strip()
+    if not s:
+        return False
+    if _CIGNA_SYNTHETIC_LOGIN.match(s):
+        return False
+    return True
+
+
+def _patient_id_from_cigna_fhir_userinfo_body(body: Dict[str, Any]) -> Optional[str]:
+    """
+    Cigna validation doc: GET {FHIR base}/$userinfo (not only OAuth /userinfo).
+    Response may be Parameters or SMART-style JSON.
+    """
+    if body.get("resourceType") == "Parameters":
+        params = body.get("parameter")
+        if isinstance(params, list):
+            for p in params:
+                if not isinstance(p, dict):
+                    continue
+                name = (p.get("name") or "").strip().lower()
+                if name not in ("patient", "patientid", "fhiruser"):
+                    continue
+                ref = p.get("valueReference")
+                if isinstance(ref, dict):
+                    r = ref.get("reference")
+                    if isinstance(r, str) and r.strip():
+                        return r.strip().rsplit("/", 1)[-1]
+                vs = p.get("valueString")
+                if isinstance(vs, str) and vs.strip():
+                    s = vs.strip()
+                    return s.rsplit("/", 1)[-1] if "/" in s else s
+                vu = p.get("valueUri")
+                if isinstance(vu, str) and vu.strip():
+                    s = vu.strip()
+                    return s.rsplit("/", 1)[-1] if "/" in s else s
+    return _patient_id_from_userinfo(body)
+
+
+def _cigna_fhir_userinfo_url(cfg: PayerConfig) -> str:
+    override = _env("CIGNA_FHIR_USERINFO_URL")
+    if override and override.strip():
+        return override.strip().rstrip("/")
+    return f"{cfg.fhir_base_url.rstrip('/')}/$userinfo"
+
+
+def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
+    access = token.get("access_token")
+    if not access or not isinstance(access, str):
+        return None
+    at = access.strip()
+
+    try:
+        resp = requests.get(
+            _cigna_fhir_userinfo_url(cfg),
+            headers={
+                "Authorization": f"Bearer {at}",
+                "Accept": "application/fhir+json, application/json",
+            },
+            timeout=_http_timeout(),
+        )
+    except requests.RequestException:
+        pass
+    else:
+        if resp.status_code == 200:
+            try:
+                body: Any = resp.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict):
+                pid = _patient_id_from_cigna_fhir_userinfo_body(body)
+                if pid and _cigna_acceptable_patient_local_id(pid):
+                    return pid
+
+    for key in ("patient", "patient_id"):
+        raw = token.get(key)
+        if raw is not None:
+            s = str(raw).strip()
+            if s and _cigna_acceptable_patient_local_id(s):
+                return s
+
+    if cfg.userinfo_url:
+        try:
+            resp = requests.get(
+                cfg.userinfo_url,
+                headers={"Authorization": f"Bearer {at}", "Accept": "application/json"},
+                timeout=_http_timeout(),
+            )
+        except requests.RequestException:
+            pass
+        else:
+            try:
+                body_o: Any = resp.json()
+            except ValueError:
+                body_o = None
+            if resp.status_code == 200 and isinstance(body_o, dict):
+                pid = _patient_id_from_userinfo(body_o)
+                if pid and _cigna_acceptable_patient_local_id(pid):
+                    return pid
+
+    jid = _patient_id_from_access_token_jwt(at)
+    if jid and _cigna_acceptable_patient_local_id(jid):
+        return jid
+    return None
+
+
 def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
     if not cfg.requires_userinfo:
         raw = token.get("patient") if token.get("patient") is not None else token.get("patient_id")
@@ -282,6 +393,8 @@ def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[st
             if jid:
                 return jid
         return None
+    if cfg.payer_id == "cigna":
+        return _discover_cigna_patient_id(token, cfg)
     if not cfg.userinfo_url:
         return None
     access = token.get("access_token")
@@ -370,6 +483,71 @@ def _fhir_resource_url(
     if rt == "claimresponse":
         return f"{base}/ClaimResponse?patient={pid}{sq}"
     raise ValueError(f"Unsupported resource type: {resource_type!r}")
+
+
+def _cigna_bundle_has_entries(bundle: dict[str, Any]) -> bool:
+    ent = bundle.get("entry")
+    return isinstance(ent, list) and len(ent) > 0
+
+
+def _cigna_patient_search_param_variants(logical_id: str) -> list[str]:
+    """Bare id first, then FHIR reference form; some Cigna compartment searches match only one."""
+    s = (logical_id or "").strip()
+    if not s:
+        return []
+    out: list[str] = [s]
+    if "/" not in s and not s.lower().startswith("patient/"):
+        out.append(f"Patient/{s}")
+    return out
+
+
+def _cigna_fetch_bundle_from_url(
+    cfg: PayerConfig,
+    resource_type: str,
+    url: str,
+    headers: dict[str, str],
+    timeout: Union[float, Tuple[float, float]],
+) -> dict[str, Any]:
+    """GET one search URL; empty Bundle on failure; follow Bundle.next when enabled."""
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+    except requests.RequestException:
+        return _empty_fhir_search_bundle()
+    if resp.status_code != 200:
+        return _empty_fhir_search_bundle()
+    try:
+        data: Any = resp.json()
+    except ValueError:
+        return _empty_fhir_search_bundle()
+    if not isinstance(data, dict) or data.get("resourceType") != "Bundle":
+        return _empty_fhir_search_bundle()
+    if _fhir_should_follow_bundle_next(resource_type):
+        data = _fhir_follow_bundle_next_pages(cfg, data, headers=headers, timeout=timeout)
+    return data
+
+
+def _cigna_compartment_search_bundle(
+    cfg: PayerConfig,
+    resource_type: str,
+    patient_logical_id: str,
+    headers: dict[str, str],
+    timeout: Union[float, Tuple[float, float]],
+) -> dict[str, Any]:
+    """
+    Run Cigna patient-compartment search, retrying with patient=Patient/{id} when the bare
+    logical id returns an empty searchset (server-dependent; bare id works for many esi-* rows).
+    """
+    last: dict[str, Any] = _empty_fhir_search_bundle()
+    for variant in _cigna_patient_search_param_variants(patient_logical_id):
+        try:
+            url = _fhir_resource_url(cfg, resource_type, variant, with_search_extras=False)
+        except ValueError:
+            continue
+        data = _cigna_fetch_bundle_from_url(cfg, resource_type, url, headers, timeout)
+        if _cigna_bundle_has_entries(data):
+            return data
+        last = data
+    return last
 
 
 def _fhir_bundle_next_url(bundle: dict[str, Any]) -> Optional[str]:
@@ -556,31 +734,6 @@ def _fhir_merge_cigna_dual_patient_bundles(primary: dict[str, Any], secondary: d
     )
     meta["tag"] = tags
     return out
-
-
-def _cigna_inprocess_search_bundle(
-    cfg: PayerConfig,
-    resource_type: str,
-    url: str,
-    headers: dict[str, str],
-    timeout: Union[float, Tuple[float, float]],
-) -> dict[str, Any]:
-    """GET a search Bundle for one Cigna merge leg; empty Bundle on failure; follow Bundle.next when enabled."""
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout)
-    except requests.RequestException:
-        return _empty_fhir_search_bundle()
-    if resp.status_code != 200:
-        return _empty_fhir_search_bundle()
-    try:
-        data: Any = resp.json()
-    except ValueError:
-        return _empty_fhir_search_bundle()
-    if not isinstance(data, dict) or data.get("resourceType") != "Bundle":
-        return _empty_fhir_search_bundle()
-    if _fhir_should_follow_bundle_next(resource_type):
-        data = _fhir_follow_bundle_next_pages(cfg, data, headers=headers, timeout=timeout)
-    return data
 
 
 _CIGNA_MERGEABLE_COMPARTMENT = frozenset(
@@ -994,7 +1147,7 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
             return resp_c
 
         try:
-            url_primary = _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
+            _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
         except ValueError as e:
             return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
 
@@ -1003,32 +1156,12 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
             and merge_pid != patient_id.strip()
             and rt_c in _CIGNA_MERGEABLE_COMPARTMENT
         ):
-            try:
-                url_merge = _fhir_resource_url(cfg, resource_type, merge_pid, with_search_extras=False)
-            except ValueError:
-                url_merge = None
-            b_p = _cigna_inprocess_search_bundle(cfg, resource_type, url_primary, hdrs, to)
-            b_m = (
-                _cigna_inprocess_search_bundle(cfg, resource_type, url_merge, hdrs, to)
-                if url_merge
-                else _empty_fhir_search_bundle()
-            )
+            b_p = _cigna_compartment_search_bundle(cfg, resource_type, patient_id, hdrs, to)
+            b_m = _cigna_compartment_search_bundle(cfg, resource_type, merge_pid, hdrs, to)
             out = _fhir_merge_cigna_dual_patient_bundles(b_p, b_m)
             return JsonResponse(out, status=200)
 
-        resp_c = _fhir_get_json(request, url_primary)
-        if resp_c.status_code != 200:
-            return resp_c
-        try:
-            payload_s: Any = json.loads(resp_c.content.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return resp_c
-        if (
-            isinstance(payload_s, dict)
-            and payload_s.get("resourceType") == "Bundle"
-            and _fhir_should_follow_bundle_next(resource_type)
-        ):
-            payload_s = _fhir_follow_bundle_next_pages(cfg, payload_s, headers=hdrs, timeout=to)
+        payload_s = _cigna_compartment_search_bundle(cfg, resource_type, patient_id, hdrs, to)
         return JsonResponse(payload_s, status=200, safe=isinstance(payload_s, dict))
 
     rt = _normalize_fhir_resource_type(resource_type)
