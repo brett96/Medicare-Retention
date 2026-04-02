@@ -869,15 +869,21 @@ def _is_fhir_resource_not_supported_outcome(body: Any) -> bool:
     return False
 
 
-def _unwrap_patient_bundle(data: Any, requested_patient_id: str | None = None) -> Any:
+def _unwrap_patient_bundle(
+    data: Any,
+    requested_patient_id: str | None = None,
+    *,
+    prefer_evi_over_gov: bool = False,
+) -> Any:
     """
     Some payers (e.g. Cigna) return a search Bundle for Patient lookups (Patient?_id=...).
     The UI expects a single Patient resource.
 
-    When ``requested_patient_id`` is set (compartment / SMART launch id), prefer the matching
-    Patient entry so EOB/Coverage reads use the same id Cigna indexes pharmacy EOBs under.
+    When ``requested_patient_id`` matches a bundle entry, return that Patient (SMART launch id).
 
-    Otherwise prefer a gov-* Patient when present (legacy behavior for other payers).
+    For Cigna, ``prefer_evi_over_gov`` prefers an evi-* Patient over gov-* when the token id
+    does not appear in the bundle — clinical and pharmacy EOB compartments typically use evi-*.
+    Other payers keep gov-* preference when present.
     """
     if not isinstance(data, dict) or data.get("resourceType") != "Bundle":
         return data
@@ -901,6 +907,12 @@ def _unwrap_patient_bundle(data: Any, requested_patient_id: str | None = None) -
         for p in patients:
             pid = p.get("id")
             if isinstance(pid, str) and pid.strip() == req:
+                return p
+
+    if prefer_evi_over_gov:
+        for p in patients:
+            pid = p.get("id")
+            if isinstance(pid, str) and pid.startswith("evi-"):
                 return p
 
     for p in patients:
@@ -973,7 +985,11 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
                     payload_c: Any = json.loads(resp_c.content.decode("utf-8"))
                 except Exception:
                     return resp_c
-                payload_c = _unwrap_patient_bundle(payload_c, requested_patient_id=patient_id)
+                payload_c = _unwrap_patient_bundle(
+                    payload_c,
+                    requested_patient_id=patient_id,
+                    prefer_evi_over_gov=True,
+                )
                 return JsonResponse(payload_c, status=200, safe=isinstance(payload_c, dict))
             return resp_c
 

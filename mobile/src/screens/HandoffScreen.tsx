@@ -44,10 +44,9 @@ function compartmentPatientQueryParam(
 }
 
 /**
- * Cigna: pharmacy and other EOB rows are often compartment-indexed under the SMART launch /
- * token patient id. Use that as the primary compartment query and merge in a distinct FHIR
- * Patient.id when the resolved resource id differs (e.g. evi-*), matching retrieved bundles to
- * Parsed_Cigna_Data-style pharmacy EOB payloads.
+ * Cigna: compartment searches (EOB, Coverage, …) are keyed to FHIR Patient.id (often evi-*).
+ * Primary query uses that id; when it differs from the token `patient` claim (e.g. A000…), the
+ * API merges a second leg for the token id so both compartments are included.
  */
 function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown): string {
   const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
@@ -59,7 +58,7 @@ function cignaCompartmentQuery(tokenPatientId: string, patientPayload: unknown):
   if (!tok || fid === tok) {
     return `?patient_id=${encodeURIComponent(fid)}`;
   }
-  return `?patient_id=${encodeURIComponent(tok)}&merge_patient_id=${encodeURIComponent(fid)}`;
+  return `?patient_id=${encodeURIComponent(fid)}&merge_patient_id=${encodeURIComponent(tok)}`;
 }
 
 async function fetchFhirJson(
