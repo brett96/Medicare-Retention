@@ -5,7 +5,6 @@ import hashlib
 import html
 import json
 import os
-import re
 import secrets
 import urllib.parse
 from datetime import timedelta
@@ -259,24 +258,6 @@ def _patient_id_from_access_token_jwt(access_token: str) -> Optional[str]:
     return _patient_id_from_userinfo(data)
 
 
-def _cigna_enterprise_id_from_id_token(token: Dict[str, Any]) -> Optional[str]:
-    """Cigna id_token may carry synthEnterpriseId (sandbox member id used for ?patient= EOB searches)."""
-    id_tok = token.get("id_token")
-    if not isinstance(id_tok, str) or not id_tok.strip():
-        return None
-    data = _jwt_payload_dict(id_tok.strip())
-    if not data:
-        return None
-    for key in ("synthEnterpriseId", "synthSubscriberEnterpriseId"):
-        v = data.get(key)
-        if v is None:
-            continue
-        s = str(v).strip()
-        if s and _cigna_acceptable_patient_local_id(s):
-            return s
-    return None
-
-
 def _patient_id_from_userinfo(data: Dict[str, Any]) -> Optional[str]:
     p = data.get("patient")
     if p is not None and str(p).strip():
@@ -294,182 +275,6 @@ def _patient_id_from_userinfo(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-_CIGNA_SYNTHETIC_LOGIN = re.compile(r"^syntheticuser\d+$", re.IGNORECASE)
-
-
-def _cigna_acceptable_patient_local_id(pid: str) -> bool:
-    """OIDC `sub` is often syntheticuserNN — not valid for ?patient= FHIR searches."""
-    s = (pid or "").strip()
-    if not s:
-        return False
-    if _CIGNA_SYNTHETIC_LOGIN.match(s):
-        return False
-    return True
-
-
-def _cigna_is_clinical_style_local_id(pid: str) -> bool:
-    """
-    Sandbox FHIR $userinfo returns gov-/evi-/esi- logical ids (clinical compartment).
-    Token `patient` / access_token JWT sometimes echo those — they must not be treated as enterprise.
-    """
-    s = (pid or "").strip().lower()
-    return s.startswith(("gov-", "evi-", "esi-"))
-
-
-def _patient_id_from_cigna_fhir_userinfo_body(body: Dict[str, Any]) -> Optional[str]:
-    """
-    Cigna validation doc: GET {FHIR base}/$userinfo (not only OAuth /userinfo).
-    Response may be Parameters or SMART-style JSON.
-    """
-    if body.get("resourceType") == "Parameters":
-        params = body.get("parameter")
-        if isinstance(params, list):
-            for p in params:
-                if not isinstance(p, dict):
-                    continue
-                name = (p.get("name") or "").strip().lower()
-                if name not in ("patient", "patientid", "fhiruser"):
-                    continue
-                ref = p.get("valueReference")
-                if isinstance(ref, dict):
-                    r = ref.get("reference")
-                    if isinstance(r, str) and r.strip():
-                        return r.strip().rsplit("/", 1)[-1]
-                vs = p.get("valueString")
-                if isinstance(vs, str) and vs.strip():
-                    s = vs.strip()
-                    return s.rsplit("/", 1)[-1] if "/" in s else s
-                vu = p.get("valueUri")
-                if isinstance(vu, str) and vu.strip():
-                    s = vu.strip()
-                    return s.rsplit("/", 1)[-1] if "/" in s else s
-    return _patient_id_from_userinfo(body)
-
-
-def _cigna_fhir_userinfo_url(cfg: PayerConfig) -> str:
-    override = _env("CIGNA_FHIR_USERINFO_URL")
-    if override and override.strip():
-        return override.strip().rstrip("/")
-    return f"{cfg.fhir_base_url.rstrip('/')}/$userinfo"
-
-
-def _cigna_discover_enterprise_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
-    """
-    Synthetic enterprise / SMART id (e.g. A000…) — keys EOB, pharmacy, Coverage in Cigna sandbox.
-    OAuth userinfo + token only; never FHIR $userinfo (that returns clinical gov-/evi- ids).
-    """
-    access = token.get("access_token")
-    if not access or not isinstance(access, str):
-        return None
-    at = access.strip()
-
-    for key in ("patient", "patient_id"):
-        raw = token.get(key)
-        if raw is not None:
-            s = str(raw).strip()
-            if (
-                s
-                and _cigna_acceptable_patient_local_id(s)
-                and not _cigna_is_clinical_style_local_id(s)
-            ):
-                return s
-
-    ent = _cigna_enterprise_id_from_id_token(token)
-    if ent:
-        return ent
-
-    if cfg.userinfo_url:
-        try:
-            resp = requests.get(
-                cfg.userinfo_url,
-                headers={"Authorization": f"Bearer {at}", "Accept": "application/json"},
-                timeout=_http_timeout(),
-            )
-        except requests.RequestException:
-            pass
-        else:
-            try:
-                body_o: Any = resp.json()
-            except ValueError:
-                body_o = None
-            if resp.status_code == 200 and isinstance(body_o, dict):
-                pid = _patient_id_from_userinfo(body_o)
-                if (
-                    pid
-                    and _cigna_acceptable_patient_local_id(pid)
-                    and not _cigna_is_clinical_style_local_id(pid)
-                ):
-                    return pid
-
-    jid = _patient_id_from_access_token_jwt(at)
-    if (
-        jid
-        and _cigna_acceptable_patient_local_id(jid)
-        and not _cigna_is_clinical_style_local_id(jid)
-    ):
-        return jid
-    return None
-
-
-def _cigna_discover_clinical_patient_id_from_fhir_userinfo(
-    token: Dict[str, Any], cfg: PayerConfig
-) -> Optional[str]:
-    """FHIR $userinfo clinical id (gov- / evi- / esi-); not used for EOB compartment alone."""
-    access = token.get("access_token")
-    if not access or not isinstance(access, str):
-        return None
-    at = access.strip()
-    try:
-        resp = requests.get(
-            _cigna_fhir_userinfo_url(cfg),
-            headers={
-                "Authorization": f"Bearer {at}",
-                "Accept": "application/fhir+json, application/json",
-            },
-            timeout=_http_timeout(),
-        )
-    except requests.RequestException:
-        return None
-    if resp.status_code != 200:
-        return None
-    try:
-        body: Any = resp.json()
-    except ValueError:
-        return None
-    if not isinstance(body, dict):
-        return None
-    pid = _patient_id_from_cigna_fhir_userinfo_body(body)
-    if pid and _cigna_acceptable_patient_local_id(pid):
-        return pid
-    return None
-
-
-def _discover_cigna_dual_patient_ids(
-    token: Dict[str, Any], cfg: PayerConfig
-) -> tuple[Optional[str], Optional[str]]:
-    """
-    Returns (clinical_id, enterprise_id) for Cigna sandbox dual-id model.
-    When both resolve to the same string, returns (None, that_id) for single-id handoff.
-    """
-    enterprise = _cigna_discover_enterprise_patient_id(token, cfg)
-    clinical = _cigna_discover_clinical_patient_id_from_fhir_userinfo(token, cfg)
-    es = enterprise.strip() if enterprise else ""
-    cs = clinical.strip() if clinical else ""
-    if es and cs and es == cs:
-        return (None, es)
-    return (clinical, enterprise)
-
-
-def _discover_cigna_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
-    """Single id for non-handoff callers: prefer enterprise (EOB/Coverage key) else clinical."""
-    clinical, enterprise = _discover_cigna_dual_patient_ids(token, cfg)
-    if enterprise and str(enterprise).strip():
-        return str(enterprise).strip()
-    if clinical and str(clinical).strip():
-        return str(clinical).strip()
-    return None
-
-
 def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[str]:
     if not cfg.requires_userinfo:
         raw = token.get("patient") if token.get("patient") is not None else token.get("patient_id")
@@ -483,8 +288,6 @@ def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[st
             if jid:
                 return jid
         return None
-    if cfg.payer_id == "cigna":
-        return _discover_cigna_patient_id(token, cfg)
     if not cfg.userinfo_url:
         return None
     access = token.get("access_token")
@@ -508,31 +311,12 @@ def _discover_patient_id(token: Dict[str, Any], cfg: PayerConfig) -> Optional[st
 
 
 def _handoff_payload(token: Dict[str, Any], cfg: PayerConfig) -> Dict[str, Any]:
+    patient_id = _discover_patient_id(token, cfg)
     out: Dict[str, Any] = dict(token)
     out["payer_id"] = cfg.payer_id
-    if cfg.payer_id == "cigna":
-        clinical, enterprise = _discover_cigna_dual_patient_ids(token, cfg)
-        clin_s = clinical.strip() if clinical else ""
-        ent_s = enterprise.strip() if enterprise else ""
-        # Enterprise id keys EOB/claims (Parsed API Results — syntheticuser01 uses ?patient=A000… bare).
-        # Clinical id (FHIR $userinfo: gov-/evi-/esi-) is the merge leg for compartment union.
-        if clin_s and ent_s and clin_s != ent_s:
-            out["patient_id"] = ent_s
-            out.setdefault("patient", ent_s)
-            out["cigna_merge_patient_id"] = clin_s
-        elif clin_s:
-            out["patient_id"] = clin_s
-            out.setdefault("patient", clin_s)
-        elif ent_s:
-            out["patient_id"] = ent_s
-            out.setdefault("patient", ent_s)
-        else:
-            out["patient_id"] = None
-    else:
-        patient_id = _discover_patient_id(token, cfg)
-        out["patient_id"] = patient_id
-        if patient_id:
-            out.setdefault("patient", patient_id)
+    out["patient_id"] = patient_id
+    if patient_id:
+        out.setdefault("patient", patient_id)
     return out
 
 
@@ -592,76 +376,6 @@ def _fhir_resource_url(
     if rt == "claimresponse":
         return f"{base}/ClaimResponse?patient={pid}{sq}"
     raise ValueError(f"Unsupported resource type: {resource_type!r}")
-
-
-def _cigna_bundle_has_entries(bundle: dict[str, Any]) -> bool:
-    ent = bundle.get("entry")
-    return isinstance(ent, list) and len(ent) > 0
-
-
-def _cigna_patient_search_param_variants(logical_id: str) -> list[str]:
-    """Bare id first, then FHIR reference form; some Cigna compartment searches match only one."""
-    s = (logical_id or "").strip()
-    if not s:
-        return []
-    out: list[str] = [s]
-    if "/" not in s and not s.lower().startswith("patient/"):
-        out.append(f"Patient/{s}")
-    return out
-
-
-def _cigna_fetch_bundle_from_url(
-    cfg: PayerConfig,
-    resource_type: str,
-    url: str,
-    headers: dict[str, str],
-    timeout: Union[float, Tuple[float, float]],
-) -> dict[str, Any]:
-    """GET one search URL; empty Bundle on failure; follow Bundle.next when enabled."""
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout)
-    except requests.RequestException:
-        return _empty_fhir_search_bundle()
-    if resp.status_code != 200:
-        return _empty_fhir_search_bundle()
-    try:
-        data: Any = resp.json()
-    except ValueError:
-        return _empty_fhir_search_bundle()
-    if not isinstance(data, dict) or data.get("resourceType") != "Bundle":
-        return _empty_fhir_search_bundle()
-    if _fhir_should_follow_bundle_next(resource_type):
-        data = _fhir_follow_bundle_next_pages(cfg, data, headers=headers, timeout=timeout)
-    return data
-
-
-def _cigna_compartment_search_bundle(
-    cfg: PayerConfig,
-    resource_type: str,
-    patient_logical_id: str,
-    headers: dict[str, str],
-    timeout: Union[float, Tuple[float, float]],
-) -> dict[str, Any]:
-    """
-    Run Cigna patient-compartment search, retrying with patient=Patient/{id} when the bare
-    logical id returns an empty searchset (server-dependent; bare id works for many esi-* rows).
-    If all attempts are empty, return the *first* bundle so Bundle.link.self matches bare
-    ?patient=… (as in Parsed API Results), not only the Patient/… retry.
-    """
-    last: dict[str, Any] = _empty_fhir_search_bundle()
-    first_empty: dict[str, Any] | None = None
-    for variant in _cigna_patient_search_param_variants(patient_logical_id):
-        try:
-            url = _fhir_resource_url(cfg, resource_type, variant, with_search_extras=False)
-        except ValueError:
-            continue
-        data = _cigna_fetch_bundle_from_url(cfg, resource_type, url, headers, timeout)
-        if _cigna_bundle_has_entries(data):
-            return data
-        if first_empty is None:
-            first_empty = data
-        last = data
-    return first_empty if first_empty is not None else last
 
 
 def _fhir_bundle_next_url(bundle: dict[str, Any]) -> Optional[str]:
@@ -791,75 +505,6 @@ def _fhir_should_follow_bundle_next(resource_type: str) -> bool:
         return False
     rt = _normalize_fhir_resource_type(resource_type)
     return rt != "patient"
-
-
-def _bundle_entry_dedupe_key(entry: Any) -> Optional[str]:
-    if not isinstance(entry, dict):
-        return None
-    r = entry.get("resource")
-    if isinstance(r, dict):
-        rid, rt = r.get("id"), r.get("resourceType")
-        if isinstance(rid, str) and rid.strip() and isinstance(rt, str) and rt.strip():
-            return f"{rt.strip()}/{rid.strip()}"
-    fu = entry.get("fullUrl")
-    if isinstance(fu, str) and fu.strip():
-        return fu.strip()
-    return None
-
-
-def _fhir_merge_cigna_dual_patient_bundles(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
-    """Merge two search Bundles; dedupe by resource type+id or fullUrl."""
-    out = dict(primary)
-    e1 = primary.get("entry") if isinstance(primary.get("entry"), list) else []
-    e2 = secondary.get("entry") if isinstance(secondary.get("entry"), list) else []
-    seen: set[str] = set()
-    merged_list: list[Any] = []
-    for e in e1:
-        k = _bundle_entry_dedupe_key(e)
-        if k:
-            seen.add(k)
-        merged_list.append(e)
-    for e in e2:
-        k = _bundle_entry_dedupe_key(e)
-        if k and k in seen:
-            continue
-        if k:
-            seen.add(k)
-        merged_list.append(e)
-    out["entry"] = merged_list
-    out["total"] = len(merged_list)
-    links_out: list[dict[str, Any]] = []
-    for item in primary.get("link") or []:
-        if isinstance(item, dict) and (item.get("relation") or "").strip().lower() != "next":
-            links_out.append(item)
-    out["link"] = links_out
-    meta = out.get("meta")
-    if not isinstance(meta, dict):
-        meta = {}
-        out["meta"] = meta
-    tlist = meta.get("tag")
-    tags = list(tlist) if isinstance(tlist, list) else []
-    tags.append(
-        {
-            "system": "https://medicare-retention.local/fhir-proxy",
-            "code": "cigna-dual-patient-merge",
-            "display": "Merged compartment search for Cigna enterprise (EOB/claims) and clinical (FHIR $userinfo) patient ids.",
-        }
-    )
-    meta["tag"] = tags
-    return out
-
-
-_CIGNA_MERGEABLE_COMPARTMENT = frozenset(
-    {
-        "explanationofbenefit",
-        "medicationrequest",
-        "coverage",
-        "encounter",
-        "claim",
-        "claimresponse",
-    }
-)
 
 
 @require_GET
@@ -1146,18 +791,13 @@ def _is_fhir_resource_not_supported_outcome(body: Any) -> bool:
 def _unwrap_patient_bundle(
     data: Any,
     requested_patient_id: str | None = None,
-    *,
-    prefer_evi_over_gov: bool = False,
 ) -> Any:
     """
     Some payers (e.g. Cigna) return a search Bundle for Patient lookups (Patient?_id=...).
-    The UI expects a single Patient resource.
+    The UI's patient summary expects a single Patient resource; prefer a gov-* Patient when present
+    because downstream resources (EOB/Coverage/Encounter) commonly reference that id.
 
     When ``requested_patient_id`` matches a bundle entry, return that Patient (SMART launch id).
-
-    For Cigna, ``prefer_evi_over_gov`` prefers an evi-* Patient over gov-* when the token id
-    does not appear in the bundle — clinical and pharmacy EOB compartments typically use evi-*.
-    Other payers keep gov-* preference when present.
     """
     if not isinstance(data, dict) or data.get("resourceType") != "Bundle":
         return data
@@ -1181,12 +821,6 @@ def _unwrap_patient_bundle(
         for p in patients:
             pid = p.get("id")
             if isinstance(pid, str) and pid.strip() == req:
-                return p
-
-    if prefer_evi_over_gov:
-        for p in patients:
-            pid = p.get("id")
-            if isinstance(pid, str) and pid.startswith("evi-"):
                 return p
 
     for p in patients:
@@ -1232,58 +866,6 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
     patient_id = request.GET.get("patient_id") or request.GET.get("patient")
     if not patient_id:
         return JsonResponse({"error": "missing_patient_id"}, status=400)
-
-    # Cigna: no &_count; unsupported types → empty Bundle (200); optional dual-id merge + Bundle pagination.
-    if cfg.payer_id == "cigna":
-        rt_c = _normalize_fhir_resource_type(resource_type)
-        if rt_c in cfg.fhir_unsupported_resources:
-            return JsonResponse(_empty_fhir_search_bundle(), status=200)
-
-        tok = _bearer_token(request)
-        if not tok:
-            return JsonResponse({"error": "missing_bearer_token"}, status=401)
-        hdrs = {"Authorization": f"Bearer {tok}", "Accept": "application/fhir+json"}
-        to = _http_timeout()
-        merge_pid = (
-            request.GET.get("merge_patient_id") or request.GET.get("cigna_merge_patient_id") or ""
-        ).strip()
-
-        if rt_c == "patient":
-            try:
-                url_c = _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
-            except ValueError as e:
-                return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
-            resp_c = _fhir_get_json(request, url_c)
-            if resp_c.status_code == 200:
-                try:
-                    payload_c: Any = json.loads(resp_c.content.decode("utf-8"))
-                except Exception:
-                    return resp_c
-                payload_c = _unwrap_patient_bundle(
-                    payload_c,
-                    requested_patient_id=patient_id,
-                    prefer_evi_over_gov=True,
-                )
-                return JsonResponse(payload_c, status=200, safe=isinstance(payload_c, dict))
-            return resp_c
-
-        try:
-            _fhir_resource_url(cfg, resource_type, patient_id, with_search_extras=False)
-        except ValueError as e:
-            return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
-
-        if (
-            merge_pid
-            and merge_pid != patient_id.strip()
-            and rt_c in _CIGNA_MERGEABLE_COMPARTMENT
-        ):
-            b_p = _cigna_compartment_search_bundle(cfg, resource_type, patient_id, hdrs, to)
-            b_m = _cigna_compartment_search_bundle(cfg, resource_type, merge_pid, hdrs, to)
-            out = _fhir_merge_cigna_dual_patient_bundles(b_p, b_m)
-            return JsonResponse(out, status=200)
-
-        payload_s = _cigna_compartment_search_bundle(cfg, resource_type, patient_id, hdrs, to)
-        return JsonResponse(payload_s, status=200, safe=isinstance(payload_s, dict))
 
     rt = _normalize_fhir_resource_type(resource_type)
     if rt in cfg.fhir_unsupported_resources:
