@@ -53,7 +53,7 @@ export function LoginScreen(props: Props) {
       <View style={{ height: 14 }} />
 
       <Text style={{ fontWeight: "600" }}>Payer</Text>
-      <View style={{ flexDirection: "row", gap: 10, marginTop: 8, flexWrap: "wrap" as any }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
         {(["elevance", "cigna", "aetna", "bluebutton"] as const).map((id) => (
           <TouchableOpacity
             key={id}
