@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { Linking, Platform, Text, TextInput, TouchableOpacity, View } from "react-native";
 
-export type PayerId = "elevance" | "cigna" | "aetna";
+export type PayerId = "elevance" | "cigna" | "aetna" | "bluebutton";
 
 type Props = {
   /** Default API origin (no trailing slash), e.g. from EXPO_PUBLIC_API_BASE_URL */
@@ -54,7 +54,7 @@ export function LoginScreen(props: Props) {
 
       <Text style={{ fontWeight: "600" }}>Payer</Text>
       <View style={{ flexDirection: "row", gap: 10, marginTop: 8, flexWrap: "wrap" as any }}>
-        {(["elevance", "cigna", "aetna"] as const).map((id) => (
+        {(["elevance", "cigna", "aetna", "bluebutton"] as const).map((id) => (
           <TouchableOpacity
             key={id}
             onPress={() => setPayer(id)}
@@ -66,7 +66,13 @@ export function LoginScreen(props: Props) {
             }}
           >
             <Text style={{ color: payer === id ? "#fff" : "#111", fontWeight: "600" }}>
-              {id === "elevance" ? "Elevance" : id === "cigna" ? "Cigna" : "Aetna"}
+              {id === "elevance"
+                ? "Elevance"
+                : id === "cigna"
+                  ? "Cigna"
+                  : id === "aetna"
+                    ? "Aetna"
+                    : "Blue Button"}
             </Text>
           </TouchableOpacity>
         ))}

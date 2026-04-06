@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -63,6 +64,8 @@ class PayerConfig:
     oauth_scope_literal_asterisk: bool = False
     # Optional portal “App name” sent as authorize param `appname` (Aetna).
     oauth_app_name: str | None = None
+    # Coverage search uses `patient=` (most payers) or `beneficiary=` (CMS Blue Button API).
+    coverage_search_param: str = "patient"
 
 
 DEFAULT_SCOPE = "launch/patient patient/*.read openid fhirUser"
@@ -105,6 +108,31 @@ DEFAULT_AETNA_SCOPE = "launch/patient patient/*.read"
 _AETNA_FHIR_UNSUPPORTED = frozenset(
     {
         "medicationstatement",
+        "claim",
+        "claimresponse",
+    }
+)
+
+# CMS Blue Button 2.0 — sandbox defaults (override for production).
+# https://bluebutton.cms.gov/api-documentation/
+DEFAULT_BLUEBUTTON_AUTH_URL = "https://sandbox.bluebutton.cms.gov/v2/o/authorize/"
+DEFAULT_BLUEBUTTON_TOKEN_URL = "https://sandbox.bluebutton.cms.gov/v2/o/token/"
+DEFAULT_BLUEBUTTON_FHIR_BASE_URL = "https://sandbox.bluebutton.cms.gov/v2/fhir"
+DEFAULT_BLUEBUTTON_USERINFO_URL = "https://sandbox.bluebutton.cms.gov/v2/connect/userinfo"
+# SMART `aud` for /authorize (not the same as FHIR data path).
+DEFAULT_BLUEBUTTON_OAUTH_AUDIENCE = "https://sandbox.bluebutton.cms.gov"
+# CARIN scopes + SMART launch + OIDC (per CMS Blue Button validation requirements).
+DEFAULT_BLUEBUTTON_SCOPE = (
+    "launch/patient patient/Patient.rs patient/Coverage.rs patient/ExplanationOfBenefit.rs openid profile"
+)
+
+# Blue Button exposes Patient, Coverage, EOB; other compartment types typically absent.
+_BLUEBUTTON_FHIR_UNSUPPORTED = frozenset(
+    {
+        "encounter",
+        "medicationrequest",
+        "medicationstatement",
+        "medicationdispense",
         "claim",
         "claimresponse",
     }
@@ -176,13 +204,52 @@ def _aetna_payer() -> PayerConfig:
     )
 
 
-_BUILDERS = {
+def _bluebutton_configured() -> bool:
+    """CMS Blue Button is confidential-only; needs id, secret, and redirect URI."""
+    return bool(
+        _env("BLUEBUTTON_CLIENT_ID")
+        and _env("BLUEBUTTON_CLIENT_SECRET")
+        and _env("BLUEBUTTON_REDIRECT_URI")
+    )
+
+
+def _bluebutton_payer() -> PayerConfig:
+    aud = _env("BLUEBUTTON_OAUTH_AUDIENCE", DEFAULT_BLUEBUTTON_OAUTH_AUDIENCE) or DEFAULT_BLUEBUTTON_OAUTH_AUDIENCE
+    return PayerConfig(
+        payer_id="bluebutton",
+        client_id=_require_env("BLUEBUTTON_CLIENT_ID"),
+        client_secret=_require_env("BLUEBUTTON_CLIENT_SECRET"),
+        redirect_uri=_require_env("BLUEBUTTON_REDIRECT_URI"),
+        auth_url=_env("BLUEBUTTON_AUTH_URL", DEFAULT_BLUEBUTTON_AUTH_URL) or DEFAULT_BLUEBUTTON_AUTH_URL,
+        token_url=_env("BLUEBUTTON_TOKEN_URL", DEFAULT_BLUEBUTTON_TOKEN_URL) or DEFAULT_BLUEBUTTON_TOKEN_URL,
+        fhir_base_url=_env("BLUEBUTTON_FHIR_BASE_URL", DEFAULT_BLUEBUTTON_FHIR_BASE_URL)
+        or DEFAULT_BLUEBUTTON_FHIR_BASE_URL,
+        scope=_env("BLUEBUTTON_SCOPE", DEFAULT_BLUEBUTTON_SCOPE) or DEFAULT_BLUEBUTTON_SCOPE,
+        requires_userinfo=True,
+        userinfo_url=_env("BLUEBUTTON_USERINFO_URL", DEFAULT_BLUEBUTTON_USERINFO_URL)
+        or DEFAULT_BLUEBUTTON_USERINFO_URL,
+        patient_lookup_mode="path",
+        fhir_unsupported_resources=_BLUEBUTTON_FHIR_UNSUPPORTED,
+        oauth_audience=aud,
+        oauth_scope_literal_asterisk=False,
+        coverage_search_param="beneficiary",
+    )
+
+
+_BASE_BUILDERS: dict[str, Callable[[], PayerConfig]] = {
     "aetna": _aetna_payer,
     "cigna": _cigna_payer,
     "elevance": _elevance_payer,
 }
 
-# Disabled placeholders on /authorize until OAuth + env are implemented (not in _BUILDERS).
+
+def _builders_map() -> dict[str, Callable[[], PayerConfig]]:
+    m = dict(_BASE_BUILDERS)
+    if _bluebutton_configured():
+        m["bluebutton"] = _bluebutton_payer
+    return m
+
+# Disabled placeholders on /authorize until OAuth + env are implemented (not in _BASE_BUILDERS).
 # Tuple: (id_slug, display_label, optional public documentation URL).
 PLANNED_PAYER_ROWS: tuple[tuple[str, str, str | None], ...] = (
     ("humana", "Humana", None),
@@ -196,11 +263,15 @@ PAYER_DISPLAY_NAMES: dict[str, str] = {
     "elevance": "Elevance",
     "cigna": "Cigna — Patient Access",
     "aetna": "Aetna — Patient Access",
+    "bluebutton": "CMS Blue Button 2.0",
 }
+
+# Always show in /authorize picker; disabled until env is complete.
+_PICKER_EXTRA_IDS: frozenset[str] = frozenset({"bluebutton"})
 
 
 def list_registered_payer_ids() -> list[str]:
-    return sorted(_BUILDERS.keys())
+    return sorted(_builders_map().keys())
 
 
 def list_configured_payers() -> list[tuple[str, str]]:
@@ -223,10 +294,24 @@ def list_picker_payer_rows() -> list[tuple[str, str, bool, str | None]]:
     `setup_hint` is a short message when configured is False (which env vars to set).
     """
     rows: list[tuple[str, str, bool, str | None]] = []
-    for pid in list_registered_payer_ids():
+    picker_ids = sorted(set(list_registered_payer_ids()) | _PICKER_EXTRA_IDS)
+    for pid in picker_ids:
         label = PAYER_DISPLAY_NAMES.get(pid, pid.replace("_", " ").title())
         try:
             get_payer_config(pid)
+        except KeyError:
+            if pid == "bluebutton":
+                rows.append(
+                    (
+                        pid,
+                        label,
+                        False,
+                        "Set BLUEBUTTON_CLIENT_ID, BLUEBUTTON_CLIENT_SECRET, and BLUEBUTTON_REDIRECT_URI "
+                        "(optional: BLUEBUTTON_AUTH_URL, BLUEBUTTON_TOKEN_URL, BLUEBUTTON_FHIR_BASE_URL, "
+                        "BLUEBUTTON_USERINFO_URL, BLUEBUTTON_SCOPE, BLUEBUTTON_OAUTH_AUDIENCE).",
+                    )
+                )
+            continue
         except RuntimeError as e:
             hint = str(e).replace("Missing required environment variable: ", "")
             rows.append((pid, label, False, f"Set {hint} in the environment."))
@@ -237,6 +322,7 @@ def list_picker_payer_rows() -> list[tuple[str, str, bool, str | None]]:
 
 def get_payer_config(payer_id: str) -> PayerConfig:
     key = (payer_id or "").strip().lower()
-    if key not in _BUILDERS:
+    b = _builders_map()
+    if key not in b:
         raise KeyError(f"Unknown payer_id: {payer_id!r}")
-    return _BUILDERS[key]()
+    return b[key]()

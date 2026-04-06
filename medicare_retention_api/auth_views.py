@@ -109,7 +109,11 @@ def _html_authorize_picker(request: HttpRequest) -> HttpResponse:
         payer_class = (
             " btn-cigna"
             if pid == "cigna"
-            else (" btn-aetna" if pid == "aetna" else "")
+            else (
+                " btn-aetna"
+                if pid == "aetna"
+                else (" btn-bluebutton" if pid == "bluebutton" else "")
+            )
         )
         if configured:
             path = f"/api/auth/{urllib.parse.quote(pid)}/authorize/"
@@ -173,6 +177,9 @@ def _html_authorize_picker(request: HttpRequest) -> HttpResponse:
     }}
     span.btn-disabled.btn-cigna {{ background: #a8c5d4; color: #3d5a66; }}
     span.btn-disabled.btn-aetna {{ background: #c9b0cf; color: #4a3550; }}
+    a.btn.btn-bluebutton {{ background: #0b2e59; }}
+    a.btn.btn-bluebutton:hover {{ background: #061a33; }}
+    span.btn-disabled.btn-bluebutton {{ background: #a8b4c9; color: #2c3a4d; }}
     span.btn-planned {{
       display: block; text-align: center; padding: 0.85rem 1rem; border-radius: 10px;
       background: #eceef1; color: #5a5f66; font-weight: 600; font-size: 1rem; cursor: default;
@@ -335,12 +342,15 @@ def _normalize_fhir_resource_type(segment: str) -> str:
     return aliases.get(s, s)
 
 
-def _fhir_search_extra_query() -> str:
+def _fhir_search_extra_query(cfg: PayerConfig | None = None) -> str:
     """Optional &_count= for compartment searches (set FHIR_DEFAULT_SEARCH_COUNT, e.g. 100)."""
     n = _env("FHIR_DEFAULT_SEARCH_COUNT")
     if not n or not str(n).isdigit():
         return ""
     v = int(n)
+    # CMS Blue Button: max _count is 50 per API documentation.
+    if cfg and cfg.payer_id == "bluebutton":
+        v = min(v, 50)
     if v < 1 or v > 500:
         return ""
     return f"&_count={v}"
@@ -351,14 +361,15 @@ def _fhir_resource_url(
 ) -> str:
     base = cfg.fhir_base_url.rstrip("/")
     pid = urllib.parse.quote(patient_id)
-    sq = _fhir_search_extra_query() if with_search_extras else ""
+    sq = _fhir_search_extra_query(cfg) if with_search_extras else ""
     rt = _normalize_fhir_resource_type(resource_type)
+    cov_param = cfg.coverage_search_param or "patient"
     if rt == "patient":
         if cfg.patient_lookup_mode == "id_search":
             return f"{base}/Patient?_id={pid}{sq}"
         return f"{base}/Patient/{pid}"
     if rt == "coverage":
-        return f"{base}/Coverage?patient={pid}{sq}"
+        return f"{base}/Coverage?{cov_param}={pid}{sq}"
     if rt == "encounter":
         return f"{base}/Encounter?patient={pid}{sq}"
     if rt == "explanationofbenefit":
@@ -729,6 +740,12 @@ def oauth_debug_config(request: HttpRequest) -> HttpResponse:
             "and register the same redirect URI in the portal. If the login page shows only the text null, "
             "try setting AETNA_APP_NAME to the App Name from the portal and retry."
         )
+    if cfg.payer_id == "bluebutton":
+        payload["bluebutton_checklist"] = (
+            "Sandbox: register at sandbox.bluebutton.cms.gov (confidential client, authorization code, PKCE S256). "
+            "Coverage uses beneficiary=; EOB type filters must be lowercase (e.g. type=pde). "
+            "Production requires CMS approval — see bluebutton.cms.gov."
+        )
     return JsonResponse(payload)
 
 
@@ -878,8 +895,13 @@ def proxy_fhir(request: HttpRequest, payer_id: str, resource_type: str) -> HttpR
         else None
     )
 
+    # Cigna sandbox does not support &_count= on compartment searches.
+    skip_search_extras = cfg.payer_id == "cigna"
     try:
-        url = _fhir_resource_url(cfg, resource_type, patient_id)
+        url = _fhir_resource_url(
+            cfg, resource_type, patient_id,
+            with_search_extras=not skip_search_extras,
+        )
     except ValueError as e:
         return JsonResponse({"error": "unsupported_resource", "detail": str(e)}, status=400)
 

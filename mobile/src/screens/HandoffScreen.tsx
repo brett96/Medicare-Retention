@@ -29,46 +29,6 @@ function getQueryParamFromUrl(url: string, key: string): string | null {
 
 type FhirFetchResult = { ok: boolean; status: number; data: unknown };
 
-/**
- * Non-Cigna: prefer FHIR Patient.id from the Patient response for compartment reads.
- */
-function compartmentPatientQueryParam(
-  tokenPatientId: string,
-  patientPayload: unknown
-): string {
-  const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
-  if (p?.resourceType === "Patient" && typeof p.id === "string" && p.id.trim()) {
-    return encodeURIComponent(p.id.trim());
-  }
-  return encodeURIComponent(tokenPatientId);
-}
-
-/**
- * Cigna sandbox dual-id: enterprise (A000…, EOB/claims per Parsed API Results) vs clinical (FHIR $userinfo).
- * Handoff sends `patient_id` = enterprise and `cigna_merge_patient_id` = clinical when both exist.
- * Proxy merges both compartment legs for mergeable resources.
- */
-function cignaCompartmentQuery(
-  handoffPatientId: string,
-  handoffMergePatientId: string | undefined,
-  patientPayload: unknown
-): string {
-  const primary = handoffPatientId.trim();
-  const explicitMerge = (handoffMergePatientId || "").trim();
-  if (explicitMerge && explicitMerge !== primary) {
-    return `?patient_id=${encodeURIComponent(primary)}&merge_patient_id=${encodeURIComponent(explicitMerge)}`;
-  }
-  const p = patientPayload as { resourceType?: string; id?: string } | null | undefined;
-  if (p?.resourceType !== "Patient" || typeof p.id !== "string" || !p.id.trim()) {
-    return `?patient_id=${encodeURIComponent(primary)}`;
-  }
-  const fid = p.id.trim();
-  if (!primary || fid === primary) {
-    return `?patient_id=${encodeURIComponent(fid)}`;
-  }
-  return `?patient_id=${encodeURIComponent(primary)}&merge_patient_id=${encodeURIComponent(fid)}`;
-}
-
 async function fetchFhirJson(
   apiBase: string,
   path: string,
@@ -187,10 +147,6 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
           (tokenJson?.patient as string | undefined) ||
           (tokenJson?.patient_id as string | undefined) ||
           "";
-        const cignaMergePatientId =
-          typeof tokenJson?.cigna_merge_patient_id === "string"
-            ? tokenJson.cigna_merge_patient_id.trim()
-            : "";
         const idTok = tokenJson?.id_token;
         if (typeof idTok === "string" && idTok.length > 0) {
           setIdTokenClaims(parseJwtPayload(idTok));
@@ -201,53 +157,41 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
           return;
         }
 
+        const pid = encodeURIComponent(patientId);
         const token = tokenJson.access_token as string;
         const payerSeg = encodeURIComponent(payerId);
-        const patientLookupQ = `?patient_id=${encodeURIComponent(patientId)}`;
+        const q = `?patient_id=${pid}`;
 
         const errs: Record<string, string> = {};
 
         setStatus("Loading Patient…");
-        const pat = await fetchFhirJson(
-          apiBase,
-          `/api/fhir/${payerSeg}/Patient/${patientLookupQ}`,
-          token
-        );
+        const pat = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Patient/${q}`, token);
         if (pat.ok) setPatientResource(pat.data);
         else errs.patient = summarizeFhirError(pat);
 
-        const compartmentQ =
-          payerId === "cigna"
-            ? cignaCompartmentQuery(
-                patientId,
-                cignaMergePatientId || undefined,
-                pat.ok ? pat.data : null
-              )
-            : `?patient_id=${compartmentPatientQueryParam(patientId, pat.ok ? pat.data : null)}`;
-
         setStatus("Loading Coverage…");
-        const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${compartmentQ}`, token);
+        const cov = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Coverage/${q}`, token);
         if (cov.ok) setCoverageBundle(cov.data);
         else errs.coverage = summarizeFhirError(cov);
 
         setStatus("Loading Explanation of Benefit…");
         const eob = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/ExplanationOfBenefit/${compartmentQ}`,
+          `/api/fhir/${payerSeg}/ExplanationOfBenefit/${q}`,
           token
         );
         if (eob.ok) setEobBundle(eob.data);
         else errs.eob = summarizeFhirError(eob);
 
         setStatus("Loading Encounters…");
-        const enc = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Encounter/${compartmentQ}`, token);
+        const enc = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Encounter/${q}`, token);
         if (enc.ok) setEncounterBundle(enc.data);
         else errs.encounter = summarizeFhirError(enc);
 
         setStatus("Loading MedicationRequest (prescriptions)…");
         const mr = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/MedicationRequest/${compartmentQ}`,
+          `/api/fhir/${payerSeg}/MedicationRequest/${q}`,
           token
         );
         if (mr.ok) setMedicationRequestBundle(mr.data);
@@ -256,7 +200,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         setStatus("Loading MedicationStatement…");
         const ms = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/MedicationStatement/${compartmentQ}`,
+          `/api/fhir/${payerSeg}/MedicationStatement/${q}`,
           token
         );
         if (ms.ok) setMedicationStatementBundle(ms.data);
@@ -265,14 +209,14 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
         setStatus("Loading MedicationDispense…");
         const md = await fetchFhirJson(
           apiBase,
-          `/api/fhir/${payerSeg}/MedicationDispense/${compartmentQ}`,
+          `/api/fhir/${payerSeg}/MedicationDispense/${q}`,
           token
         );
         if (md.ok) setMedicationDispenseBundle(md.data);
         else errs.medicationDispense = summarizeFhirError(md);
 
         setStatus("Loading Claim…");
-        const cl = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Claim/${compartmentQ}`, token);
+        const cl = await fetchFhirJson(apiBase, `/api/fhir/${payerSeg}/Claim/${q}`, token);
         if (cl.ok) setClaimBundle(cl.data);
         else errs.claim = summarizeFhirError(cl);
 
@@ -630,11 +574,7 @@ export function HandoffScreen(props: { initialUrl?: string; code?: string }) {
                 <View style={{ marginBottom: 12 }}>
                   <Text style={{ fontWeight: "600", marginBottom: 4 }}>Token (metadata)</Text>
                   <Text style={{ fontFamily: mono, fontSize: 11 }}>
-                    payer_id {String(tokenPayload.payer_id ?? "—")} · patient_id{" "}
-                    {String(tokenPayload.patient_id ?? tokenPayload.patient ?? "—")}
-                    {tokenPayload.payer_id === "cigna" && tokenPayload.cigna_merge_patient_id
-                      ? ` · cigna_merge_patient_id ${String(tokenPayload.cigna_merge_patient_id)}`
-                      : ""}
+                    payer_id {String(tokenPayload.payer_id ?? "—")} · patient_id {String(tokenPayload.patient_id ?? tokenPayload.patient ?? "—")}
                   </Text>
                   <Text style={{ fontFamily: mono, fontSize: 11 }}>
                     type {String(tokenPayload.token_type)} · expires_in {String(tokenPayload.expires_in)} · scope{" "}

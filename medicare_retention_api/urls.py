@@ -44,7 +44,7 @@ def root(request):
                 "fhir_legacy_elevance": "/api/fhir/patient/ … /eob/ … /medicationrequest/ … (Elevance shorthand)",
                 "dailymed_proxy": "/api/drugs/?name=<query>",
                 "admin": "/admin/",
-                "oauth_debug": "/api/debug/oauth/?payer=elevance|cigna|aetna (requires OAUTH_DEBUG=1)",
+                "oauth_debug": "/api/debug/oauth/?payer=elevance|cigna|aetna|bluebutton (requires OAUTH_DEBUG=1)",
             },
         }
     )
