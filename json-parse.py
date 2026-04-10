@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from typing import Any
@@ -19,6 +20,10 @@ import pandas as pd
 
 DEFAULT_EXCEL = "elevance.xlsx"
 DEFAULT_OUT = "Parsed_Elevance_Data"
+
+# Excel worksheet limits (xlsx). If we exceed these, we must split across sheets/files.
+_EXCEL_MAX_ROWS = 1_048_576
+_EXCEL_MAX_COLS = 16_384
 
 
 def flatten_json(y: Any) -> dict[str, Any]:
@@ -124,11 +129,61 @@ def run_from_json_text(text: str, out_stem: str) -> None:
 def _write_outputs(final_df: pd.DataFrame, out_stem: str) -> None:
     xlsx_path = f"{out_stem}.xlsx"
     csv_path = f"{out_stem}.csv"
-    final_df.to_excel(xlsx_path, index=False)
+
+    # Always write CSV (no practical sheet-size limits).
     final_df.to_csv(csv_path, index=False)
+
+    # Write Excel, splitting across sheets when the DataFrame is too large.
+    n_rows, n_cols = final_df.shape
+    if n_rows <= _EXCEL_MAX_ROWS and n_cols <= _EXCEL_MAX_COLS:
+        final_df.to_excel(xlsx_path, index=False)
+        excel_note = "1 sheet"
+    else:
+        # Split by both rows and columns to satisfy Excel's hard worksheet limits.
+        row_splits = max(1, math.ceil(n_rows / _EXCEL_MAX_ROWS))
+        col_splits = max(1, math.ceil(n_cols / _EXCEL_MAX_COLS))
+
+        def _sheet_name(r_i: int, c_i: int) -> str:
+            # Excel sheet names must be <= 31 chars. Keep it deterministic and short.
+            if row_splits == 1 and col_splits > 1:
+                name = f"data_c{c_i + 1}"
+            elif col_splits == 1 and row_splits > 1:
+                name = f"data_r{r_i + 1}"
+            else:
+                name = f"data_r{r_i + 1}_c{c_i + 1}"
+            return name[:31]
+
+        # Prefer xlsxwriter (fast, reliable). Fall back to openpyxl if needed.
+        engine: str | None
+        try:
+            __import__("xlsxwriter")
+            engine = "xlsxwriter"
+        except Exception:
+            try:
+                __import__("openpyxl")
+                engine = "openpyxl"
+            except Exception:
+                engine = None
+
+        with pd.ExcelWriter(xlsx_path, engine=engine) as writer:
+            sheet_count = 0
+            for r_i in range(row_splits):
+                r_start = r_i * _EXCEL_MAX_ROWS
+                r_end = min((r_i + 1) * _EXCEL_MAX_ROWS, n_rows)
+                df_r = final_df.iloc[r_start:r_end, :]
+
+                for c_i in range(col_splits):
+                    c_start = c_i * _EXCEL_MAX_COLS
+                    c_end = min((c_i + 1) * _EXCEL_MAX_COLS, n_cols)
+                    df_chunk = df_r.iloc[:, c_start:c_end]
+                    df_chunk.to_excel(writer, sheet_name=_sheet_name(r_i, c_i), index=False)
+                    sheet_count += 1
+
+        excel_note = f"{sheet_count} sheets ({row_splits} row-split × {col_splits} col-split)"
+
     print(
         f"\n✅ Data parsed successfully! Wrote {xlsx_path} and {csv_path} "
-        f"({final_df.shape[0]} rows × {final_df.shape[1]} columns)."
+        f"({final_df.shape[0]} rows × {final_df.shape[1]} columns; Excel: {excel_note})."
     )
 
 

@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Plan-GPT Admin — Cerca Health</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#e8eaed;min-height:100vh;display:flex;justify-content:center;align-items:flex-start;padding:2rem;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;}
+
+/* ── Chrome ── */
+.browser{width:1200px;border-radius:10px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.22);}
+.chrome-top{background:#dee1e6;padding:10px 12px 0;}
+.chrome-controls{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.chrome-dot{width:12px;height:12px;border-radius:50%;}
+.chrome-dot.r{background:#ff5f57;}.chrome-dot.y{background:#febc2e;}.chrome-dot.g{background:#28c840;}
+.chrome-tabs{display:flex;gap:2px;align-items:flex-end;}
+.chrome-tab{background:#fff;border-radius:8px 8px 0 0;padding:6px 20px 6px 12px;font-size:12px;color:#3c3c3c;display:flex;align-items:center;gap:6px;min-width:220px;position:relative;}
+.chrome-tab.inactive{background:#dee1e6;color:#888;min-width:100px;}
+.chrome-tab-icon{width:14px;height:14px;border-radius:3px;background:#1d9e75;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.chrome-tab-x{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#aaa;font-size:11px;}
+.chrome-bar{background:#dee1e6;padding:0 12px 10px;display:flex;align-items:center;gap:8px;}
+.chrome-nav{display:flex;gap:4px;}
+.chrome-nav button{background:none;border:none;cursor:pointer;color:#5f6368;width:24px;height:24px;border-radius:50%;font-size:14px;display:flex;align-items:center;justify-content:center;}
+.chrome-nav button:hover{background:#c6c8cd;}
+.chrome-url{flex:1;background:white;border-radius:20px;padding:5px 14px;font-size:12px;color:#3c3c3c;display:flex;align-items:center;gap:6px;}
+.lock{color:#188038;}
+
+/* ── App shell ── */
+.app{display:flex;min-height:680px;background:#f4f6f8;}
+
+/* ── Sidebar ── */
+.sb{width:220px;background:#1a2332;flex-shrink:0;display:flex;flex-direction:column;}
+.sb-logo{padding:16px 14px 12px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;gap:10px;}
+.sb-logo-icon{width:30px;height:30px;background:#1d9e75;border-radius:7px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.sb-logo-name{color:white;font-size:13px;font-weight:700;font-family:Georgia,serif;}
+.sb-logo-sub{color:rgba(255,255,255,0.4);font-size:9px;margin-top:1px;}
+.sb-sec{padding:10px 12px 3px;font-size:9px;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:1px;font-weight:600;}
+.sb-item{display:flex;align-items:center;gap:9px;padding:7px 12px;margin:1px 8px;border-radius:7px;cursor:pointer;color:rgba(255,255,255,0.6);font-size:12px;}
+.sb-item:hover{background:rgba(255,255,255,0.07);}
+.sb-item.on{background:rgba(29,158,117,0.2);color:#1d9e75;}
+.sb-item.on svg{stroke:#1d9e75 !important;}
+.sb-item svg{width:14px;height:14px;stroke:rgba(255,255,255,0.45);stroke-width:2;fill:none;flex-shrink:0;}
+.sb-badge{background:#1d9e75;color:white;border-radius:10px;font-size:9px;font-weight:700;padding:1px 6px;margin-left:auto;}
+.sb-foot{margin-top:auto;padding:12px 14px;border-top:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;gap:8px;}
+.sb-av{width:28px;height:28px;background:#2d4a6b;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:white;flex-shrink:0;}
+.sb-uname{color:rgba(255,255,255,0.7);font-size:11px;}
+.sb-urole{color:rgba(255,255,255,0.35);font-size:9px;margin-top:1px;}
+
+/* ── Main ── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.topbar{background:white;border-bottom:1px solid #e4e8ed;padding:12px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.topbar-title{font-size:15px;font-weight:700;color:#1a2332;}
+.topbar-sub{font-size:11px;color:#8a94a6;margin-top:1px;}
+.actions{display:flex;align-items:center;gap:8px;}
+.btn{padding:6px 14px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:opacity 0.15s;}
+.btn:hover{opacity:0.85;}
+.btn-g{background:#1d9e75;color:white;}
+.btn-o{background:white;color:#1a2332;border:1px solid #d8dce4;}
+.btn-link{background:none;border:none;color:#1d9e75;font-size:12px;font-weight:600;cursor:pointer;padding:4px;}
+.btn-link:hover{text-decoration:underline;}
+.nav-tabs{background:white;border-bottom:1px solid #e4e8ed;padding:0 22px;display:flex;flex-shrink:0;}
+.nav-tab{padding:10px 16px;font-size:12px;color:#8a94a6;cursor:pointer;border-bottom:2.5px solid transparent;font-weight:500;}
+.nav-tab.on{color:#1d9e75;border-bottom-color:#1d9e75;font-weight:700;}
+.content{padding:18px 22px;flex:1;overflow-y:auto;}
+
+/* ── Metric cards ── */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px;}
+.mc{background:white;border-radius:10px;padding:14px 16px;border:1px solid #e4e8ed;}
+.mc-lbl{font-size:10px;color:#8a94a6;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;}
+.mc-val{font-size:24px;font-weight:800;color:#1a2332;line-height:1;}
+.mc-sub{font-size:10.5px;color:#8a94a6;margin-top:4px;}
+.up{color:#1d9e75;font-weight:600;}
+.mc-ico{float:right;width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin-top:-2px;}
+.ico-g{background:#e1f5ee;}
+.ico-b{background:#e6f0fb;}
+.ico-a{background:#fef3e0;}
+.ico-p{background:#f0eeff;}
+
+/* ── Charts ── */
+.charts{display:grid;grid-template-columns:320px 1fr;gap:12px;margin-bottom:18px;}
+.cc{background:white;border-radius:10px;border:1px solid #e4e8ed;padding:14px 16px;}
+.cc-title{font-size:12px;font-weight:700;color:#1a2332;margin-bottom:2px;}
+.cc-sub{font-size:10px;color:#8a94a6;margin-bottom:12px;}
+.pie-wrap{display:flex;align-items:center;gap:16px;}
+.leg{display:flex;flex-direction:column;gap:8px;flex:1;}
+.leg-row{display:flex;align-items:center;gap:7px;}
+.leg-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.leg-lbl{font-size:11px;color:#3c4a5a;}
+.leg-pct{font-size:11px;font-weight:700;color:#1a2332;margin-left:auto;}
+.bar-wrap{display:flex;align-items:flex-end;gap:22px;height:120px;}
+.bgrp{display:flex;flex-direction:column;align-items:center;gap:5px;flex:1;}
+.bcol{width:100%;border-radius:5px 5px 0 0;position:relative;}
+.bval{font-size:10px;font-weight:700;position:absolute;top:-17px;width:100%;text-align:center;}
+.blbl{font-size:11px;font-weight:600;color:#8a94a6;}
+
+/* ── Table ── */
+.tcard{background:white;border-radius:10px;border:1px solid #e4e8ed;overflow:hidden;}
+.thead-bar{padding:11px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e4e8ed;}
+.tsearch{display:flex;align-items:center;gap:7px;background:#f4f6f8;border-radius:7px;padding:5px 11px;font-size:12px;color:#8a94a6;width:220px;}
+table{width:100%;border-collapse:collapse;}
+thead th{padding:8px 12px;text-align:left;font-size:10px;font-weight:700;color:#8a94a6;text-transform:uppercase;letter-spacing:0.4px;background:#f8f9fb;border-bottom:1px solid #e4e8ed;white-space:nowrap;}
+tbody tr{border-bottom:1px solid #f0f2f5;}
+tbody tr:hover{background:#f5fdf9;cursor:pointer;}
+tbody tr:last-child{border-bottom:none;}
+tbody td{padding:8px 12px;font-size:12px;color:#3c4a5a;vertical-align:middle;}
+.tname{font-weight:600;color:#1a2332;}
+.temail{color:#8a94a6;font-size:11px;}
+.tbadge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;}
+.hi{background:#e1f5ee;color:#0f6e56;}
+.me{background:#fef3e0;color:#9a5c00;}
+.lo{background:#fce8e8;color:#922;}
+.av{width:27px;height:27px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:white;flex-shrink:0;}
+.ubar{height:4px;background:#eee;border-radius:3px;width:52px;overflow:hidden;display:inline-block;vertical-align:middle;}
+.ufill{height:100%;border-radius:3px;}
+.tpager{padding:9px 16px;display:flex;align-items:center;justify-content:space-between;background:#f8f9fb;border-top:1px solid #e4e8ed;}
+
+/* ── MEMBER DETAIL VIEW ── */
+.detail-view{display:none;flex-direction:column;}
+.breadcrumb{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#8a94a6;margin-bottom:14px;}
+.breadcrumb a{color:#1d9e75;text-decoration:none;cursor:pointer;}
+.breadcrumb a:hover{text-decoration:underline;}
+.detail-header{background:white;border-radius:10px;border:1px solid #e4e8ed;padding:18px 20px;margin-bottom:14px;display:flex;gap:20px;align-items:flex-start;}
+.detail-av{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:white;background:#1d9e75;flex-shrink:0;}
+.detail-info{flex:1;}
+.detail-name{font-size:18px;font-weight:800;color:#1a2332;margin-bottom:2px;}
+.detail-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;}
+.pill{padding:2px 9px;border-radius:10px;font-size:10.5px;font-weight:600;}
+.pill-g{background:#e1f5ee;color:#0f6e56;}
+.pill-b{background:#e6f0fb;color:#185fa5;}
+.detail-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;}
+.dg-item{display:flex;flex-direction:column;gap:2px;}
+.dg-lbl{font-size:10px;color:#8a94a6;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;}
+.dg-val{font-size:12px;color:#1a2332;font-weight:600;}
+.detail-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;}
+.ds-card{background:white;border-radius:9px;border:1px solid #e4e8ed;padding:12px 14px;}
+.ds-lbl{font-size:10px;color:#8a94a6;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-bottom:4px;}
+.ds-val{font-size:20px;font-weight:800;color:#1a2332;line-height:1;}
+.ds-sub{font-size:10px;color:#8a94a6;margin-top:3px;}
+
+/* Member detail tabs */
+.mem-tabs{background:white;border-radius:10px 10px 0 0;border:1px solid #e4e8ed;border-bottom:none;padding:0 18px;display:flex;flex-shrink:0;}
+.mem-tab{padding:10px 16px;font-size:12px;color:#8a94a6;cursor:pointer;border-bottom:2.5px solid transparent;font-weight:500;}
+.mem-tab.on{color:#1d9e75;border-bottom-color:#1d9e75;font-weight:700;}
+.mem-panel{background:white;border-radius:0 0 10px 10px;border:1px solid #e4e8ed;padding:18px;display:none;}
+.mem-panel.on{display:block;}
+
+/* Chat panel in admin */
+.chat-log{display:flex;flex-direction:column;gap:10px;max-height:320px;overflow-y:auto;padding:4px;}
+.chat-msg{display:flex;gap:8px;align-items:flex-start;}
+.chat-msg.user{flex-direction:row-reverse;}
+.chat-av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;font-weight:700;color:white;}
+.chat-bubble{max-width:68%;padding:9px 12px;border-radius:14px;font-size:12px;line-height:1.55;}
+.chat-bubble.ai{background:#f4f6f8;color:#1a2332;border-radius:4px 14px 14px 14px;}
+.chat-bubble.usr{background:#1d9e75;color:white;border-radius:14px 14px 4px 14px;}
+.chat-sender{font-size:10px;font-weight:700;color:#1d9e75;margin-bottom:3px;}
+.chat-time{font-size:10px;color:#8a94a6;margin-top:4px;}
+.chat-tag{display:inline-block;padding:2px 7px;border-radius:8px;font-size:10px;background:#e1f5ee;color:#085041;font-weight:600;margin-top:4px;}
+
+/* Rx panel */
+.rx-table{width:100%;border-collapse:collapse;font-size:12px;}
+.rx-table th{padding:7px 10px;text-align:left;font-size:10px;font-weight:700;color:#8a94a6;text-transform:uppercase;background:#f8f9fb;border-bottom:1px solid #e4e8ed;}
+.rx-table td{padding:8px 10px;border-bottom:1px solid #f0f2f5;vertical-align:middle;}
+.rx-best{color:#0f6e56;font-weight:700;}
+.rx-name{font-weight:700;color:#1a2332;}
+.rx-gen{color:#8a94a6;font-size:11px;}
+
+/* Analytics panel */
+.an-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.an-bar-lbl{font-size:11px;color:#3c4a5a;width:130px;flex-shrink:0;}
+.an-bar-track{flex:1;background:#eee;border-radius:4px;height:8px;overflow:hidden;}
+.an-bar-fill{height:100%;border-radius:4px;background:#1d9e75;}
+.an-bar-val{font-size:11px;font-weight:700;color:#1a2332;width:80px;text-align:right;}
+.an-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;}
+.an-stat{background:#f4f6f8;border-radius:8px;padding:10px 12px;}
+.an-stat-lbl{font-size:10px;color:#8a94a6;margin-bottom:3px;}
+.an-stat-val{font-size:16px;font-weight:800;color:#1a2332;}
+.an-stat-sub{font-size:10px;color:#8a94a6;margin-top:2px;}
+.an-note{background:#fffbee;border:1px solid #f5e9a0;border-radius:8px;padding:9px 12px;font-size:11.5px;color:#633806;line-height:1.5;display:flex;gap:7px;}
+
+/* Plan panel */
+.plan-rec{border:2px solid #1d9e75;border-radius:10px;overflow:hidden;margin-bottom:12px;}
+.plan-rec-head{background:#e1f5ee;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;}
+.plan-rec-title{font-size:12px;font-weight:700;color:#085041;}
+.plan-compare{background:#f8f9fb;border-radius:8px;overflow:hidden;border:1px solid #e4e8ed;}
+.plan-compare th{padding:7px 12px;font-size:10px;font-weight:700;color:#8a94a6;text-transform:uppercase;background:#f0f2f5;border-bottom:1px solid #e4e8ed;text-align:left;}
+.plan-compare td{padding:8px 12px;font-size:12px;border-bottom:1px solid #f0f2f5;color:#3c4a5a;}
+.plan-compare tr:last-child td{border-bottom:none;}
+.plan-higher{color:#a32d2d;font-weight:700;}
+</style>
+</head>
+<body>
+
+<div class="browser">
+  <!-- Chrome top -->
+  <div class="chrome-top">
+    <div class="chrome-controls">
+      <div class="chrome-dot r"></div><div class="chrome-dot y"></div><div class="chrome-dot g"></div>
+    </div>
+    <div class="chrome-tabs">
+      <div class="chrome-tab">
+        <div class="chrome-tab-icon"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+        Plan-GPT Admin — Cerca Health
+        <span class="chrome-tab-x">×</span>
+      </div>
+      <div class="chrome-tab inactive">New Tab</div>
+    </div>
+  </div>
+  <div class="chrome-bar">
+    <div class="chrome-nav">
+      <button id="back-btn" onclick="showDashboard()" title="Back">&#8592;</button>
+      <button>&#8594;</button><button>&#8635;</button>
+    </div>
+    <div class="chrome-url">
+      <span class="lock">🔒</span>
+      <span id="url-bar">plangpt.cercahealth.com/dashboard</span>
+    </div>
+    <button style="background:none;border:none;cursor:pointer;color:#5f6368;font-size:16px;padding:2px 8px;">⋮</button>
+  </div>
+
+  <div class="app">
+    <!-- Sidebar -->
+    <div class="sb">
+      <div class="sb-logo">
+        <div class="sb-logo-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <div><div class="sb-logo-name">Plan-GPT</div><div class="sb-logo-sub">Cerca Health Admin</div></div>
+      </div>
+      <div class="sb-sec">Main</div>
+      <div class="sb-item on"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Dashboard</div>
+      <div class="sb-item"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Members <span class="sb-badge">1,134</span></div>
+      <div class="sb-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>Agents <span class="sb-badge">74</span></div>
+      <div class="sb-item"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Analytics</div>
+      <div class="sb-sec">Management</div>
+      <div class="sb-item"><svg viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>Campaigns</div>
+      <div class="sb-item"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Appointments</div>
+      <div class="sb-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>App Config</div>
+      <div class="sb-foot">
+        <div class="sb-av">CH</div>
+        <div><div class="sb-uname">Cerca Health</div><div class="sb-urole">Admin Account</div></div>
+      </div>
+    </div>
+
+    <!-- Main -->
+    <div class="main">
+
+      <!-- ══════════════════ DASHBOARD VIEW ══════════════════ -->
+      <div id="dash-view">
+        <div class="topbar">
+          <div><div class="topbar-title">Dashboard</div><div class="topbar-sub">Overview across all members and agents</div></div>
+          <div class="actions">
+            <button class="btn btn-o">&#8681; Export</button>
+            <button class="btn btn-g">+ Add Member</button>
+          </div>
+        </div>
+        <div class="nav-tabs">
+          <div class="nav-tab on">Dashboard</div>
+          <div class="nav-tab">Members</div>
+          <div class="nav-tab">Agents</div>
+          <div class="nav-tab">Analytics</div>
+          <div class="nav-tab">Campaigns</div>
+          <div class="nav-tab">Settings</div>
+        </div>
+        <div class="content">
+
+          <!-- Metrics -->
+          <div class="metrics">
+            <div class="mc">
+              <div class="mc-ico ico-g" style="float:right;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#1d9e75" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+              <div class="mc-lbl">Total Members</div>
+              <div class="mc-val">1,134</div>
+              <div class="mc-sub"><span class="up">↑ 48</span> added this month</div>
+            </div>
+            <div class="mc">
+              <div class="mc-ico ico-b" style="float:right;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#185fa5" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></div>
+              <div class="mc-lbl">Licensed Agents</div>
+              <div class="mc-val">74</div>
+              <div class="mc-sub"><span class="up">↑ 3</span> added this quarter</div>
+            </div>
+            <div class="mc">
+              <div class="mc-ico ico-a" style="float:right;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#854f0b" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+              <div class="mc-lbl">App Sessions (30d)</div>
+              <div class="mc-val">8,429</div>
+              <div class="mc-sub"><span class="up">↑ 12%</span> vs prior month</div>
+            </div>
+            <div class="mc">
+              <div class="mc-ico ico-p" style="float:right;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#533ab7" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+              <div class="mc-lbl">AI Chats (30d)</div>
+              <div class="mc-val">3,217</div>
+              <div class="mc-sub"><span class="up">↑ 9%</span> vs prior month</div>
+            </div>
+          </div>
+
+          <!-- Charts -->
+          <div class="charts">
+            <div class="cc">
+              <div class="cc-title">Member Utilization</div>
+              <div class="cc-sub">Engagement level — past 30 days</div>
+              <div class="pie-wrap">
+                <svg width="130" height="130" viewBox="0 0 130 130" style="flex-shrink:0;">
+                  <circle cx="65" cy="65" r="46" fill="none" stroke="#e4e8ed" stroke-width="26"/>
+                  <circle cx="65" cy="65" r="46" fill="none" stroke="#1d9e75" stroke-width="26"
+                    stroke-dasharray="158.96 289.03" stroke-dashoffset="0" transform="rotate(-90 65 65)"/>
+                  <circle cx="65" cy="65" r="46" fill="none" stroke="#fac775" stroke-width="26"
+                    stroke-dasharray="86.71 289.03" stroke-dashoffset="-158.96" transform="rotate(-90 65 65)"/>
+                  <circle cx="65" cy="65" r="46" fill="none" stroke="#f09595" stroke-width="26"
+                    stroke-dasharray="43.35 289.03" stroke-dashoffset="-245.67" transform="rotate(-90 65 65)"/>
+                  <text x="65" y="60" text-anchor="middle" font-size="17" font-weight="800" fill="#1a2332" font-family="Segoe UI,sans-serif">1,134</text>
+                  <text x="65" y="74" text-anchor="middle" font-size="8" fill="#8a94a6" font-family="Segoe UI,sans-serif">MEMBERS</text>
+                </svg>
+                <div class="leg">
+                  <div class="leg-row">
+                    <div class="leg-dot" style="background:#1d9e75;"></div>
+                    <div><div class="leg-lbl">High utilizers</div><div style="font-size:10px;color:#aaa;">≥8 visits/mo</div></div>
+                    <div style="margin-left:auto;text-align:right;"><div class="leg-pct">55%</div><div style="font-size:10px;color:#aaa;">624</div></div>
+                  </div>
+                  <div class="leg-row">
+                    <div class="leg-dot" style="background:#fac775;"></div>
+                    <div><div class="leg-lbl">Medium utilizers</div><div style="font-size:10px;color:#aaa;">3–7 visits/mo</div></div>
+                    <div style="margin-left:auto;text-align:right;"><div class="leg-pct">30%</div><div style="font-size:10px;color:#aaa;">340</div></div>
+                  </div>
+                  <div class="leg-row">
+                    <div class="leg-dot" style="background:#f09595;"></div>
+                    <div><div class="leg-lbl">Low utilizers</div><div style="font-size:10px;color:#aaa;">0–2 visits/mo</div></div>
+                    <div style="margin-left:auto;text-align:right;"><div class="leg-pct">15%</div><div style="font-size:10px;color:#aaa;">170</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="cc">
+              <div class="cc-title">Members by Carrier</div>
+              <div class="cc-sub">Total enrolled members across all carriers</div>
+              <div style="display:flex;align-items:flex-end;gap:20px;height:120px;padding:0 10px;">
+                <div class="bgrp"><div class="bcol" style="background:#185fa5;height:110px;position:relative;"><span class="bval" style="color:#185fa5;">542</span></div><div class="blbl">UHC</div></div>
+                <div class="bgrp"><div class="bcol" style="background:#1d9e75;height:66px;position:relative;"><span class="bval" style="color:#1d9e75;">324</span></div><div class="blbl">HUM</div></div>
+                <div class="bgrp"><div class="bcol" style="background:#854f0b;height:29px;position:relative;"><span class="bval" style="color:#854f0b;">145</span></div><div class="blbl">AET</div></div>
+                <div class="bgrp"><div class="bcol" style="background:#533ab7;height:25px;position:relative;"><span class="bval" style="color:#533ab7;">123</span></div><div class="blbl">ELV</div></div>
+                <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:22px;gap:5px;">
+                  <div style="display:flex;align-items:center;gap:5px;"><div style="width:9px;height:9px;border-radius:2px;background:#185fa5;"></div><span style="font-size:10.5px;color:#3c4a5a;">UnitedHealthcare</span></div>
+                  <div style="display:flex;align-items:center;gap:5px;"><div style="width:9px;height:9px;border-radius:2px;background:#1d9e75;"></div><span style="font-size:10.5px;color:#3c4a5a;">Humana</span></div>
+                  <div style="display:flex;align-items:center;gap:5px;"><div style="width:9px;height:9px;border-radius:2px;background:#854f0b;"></div><span style="font-size:10.5px;color:#3c4a5a;">Aetna</span></div>
+                  <div style="display:flex;align-items:center;gap:5px;"><div style="width:9px;height:9px;border-radius:2px;background:#533ab7;"></div><span style="font-size:10.5px;color:#3c4a5a;">Elevance</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Table -->
+          <div class="tcard">
+            <div class="thead-bar">
+              <div><div style="font-size:13px;font-weight:700;color:#1a2332;">Recent Members</div><div style="font-size:11px;color:#8a94a6;margin-top:1px;">Showing 8 of 1,134 members</div></div>
+              <div class="actions">
+                <div class="tsearch"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Search members…</div>
+                <button class="btn btn-o" style="font-size:11px;padding:5px 10px;">Filter ▾</button>
+                <button class="btn btn-o" style="font-size:11px;padding:5px 10px;">Carrier ▾</button>
+                <button class="btn btn-o" style="font-size:11px;padding:5px 10px;">Agent ▾</button>
+              </div>
+            </div>
+            <div style="overflow-x:auto;">
+            <table>
+              <thead><tr>
+                <th>Member</th><th>Contact</th><th>Agent</th><th>Carrier</th><th>Plan</th><th>Utilization</th><th style="text-align:center;">Visits (30d)</th><th></th>
+              </tr></thead>
+              <tbody>
+                <!-- Row 1 — clickable -->
+                <tr onclick="showMember()" style="background:#f5fdf9;">
+                  <td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#1d9e75;">MJ</div><div><div class="tname" style="color:#1d9e75;text-decoration:underline;cursor:pointer;">Margaret Johnson</div><div class="temail">m.johnson&#64;gmail.com</div></div></div></td>
+                  <td style="font-size:11.5px;">(213) 555-0142</td>
+                  <td style="font-size:11.5px;">Bob Broker</td>
+                  <td style="font-weight:700;color:#1d9e75;">HUM</td>
+                  <td style="font-size:11px;color:#8a94a6;">Gold Plus HMO</td>
+                  <td><span class="tbadge hi">High</span></td>
+                  <td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:90%;background:#1d9e75;"></div></div><span style="font-size:11px;font-weight:700;">18</span></div></td>
+                  <td><button class="btn btn-g" onclick="showMember()" style="font-size:10px;padding:3px 10px;">View</button></td>
+                </tr>
+                <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#185fa5;">RD</div><div><div class="tname">Robert Davis</div><div class="temail">rdavis&#64;outlook.com</div></div></div></td><td style="font-size:11.5px;">(310) 555-0287</td><td style="font-size:11.5px;">Sarah Mills</td><td style="font-weight:700;color:#185fa5;">UHC</td><td style="font-size:11px;color:#8a94a6;">AARP HMO Select</td><td><span class="tbadge hi">High</span></td><td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:75%;background:#185fa5;"></div></div><span style="font-size:11px;font-weight:700;">14</span></div></td><td><button class="btn btn-o" style="font-size:10px;padding:3px 10px;">View</button></td></tr>
+                <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#854f0b;">PW</div><div><div class="tname">Patricia Williams</div><div class="temail">pwilliams&#64;yahoo.com</div></div></div></td><td style="font-size:11.5px;">(424) 555-0094</td><td style="font-size:11.5px;">Bob Broker</td><td style="font-weight:700;color:#854f0b;">AET</td><td style="font-size:11px;color:#8a94a6;">Medicare Adv. PPO</td><td><span class="tbadge me">Medium</span></td><td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:40%;background:#fac775;"></div></div><span style="font-size:11px;font-weight:700;">5</span></div></td><td><button class="btn btn-o" style="font-size:10px;padding:3px 10px;">View</button></td></tr>
+                <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#533ab7;">JM</div><div><div class="tname">James Martinez</div><div class="temail">jmartinez&#64;gmail.com</div></div></div></td><td style="font-size:11.5px;">(818) 555-0361</td><td style="font-size:11.5px;">Tom Chen</td><td style="font-weight:700;color:#533ab7;">ELV</td><td style="font-size:11px;color:#8a94a6;">Anthem Dual Adv.</td><td><span class="tbadge hi">High</span></td><td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:85%;background:#533ab7;"></div></div><span style="font-size:11px;font-weight:700;">17</span></div></td><td><button class="btn btn-o" style="font-size:10px;padding:3px 10px;">View</button></td></tr>
+                <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#639922;">LT</div><div><div class="tname">Linda Thompson</div><div class="temail">l.thompson&#64;icloud.com</div></div></div></td><td style="font-size:11.5px;">(562) 555-0178</td><td style="font-size:11.5px;">Sarah Mills</td><td style="font-weight:700;color:#1d9e75;">HUM</td><td style="font-size:11px;color:#8a94a6;">Gold Plus HMO</td><td><span class="tbadge me">Medium</span></td><td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:35%;background:#fac775;"></div></div><span style="font-size:11px;font-weight:700;">4</span></div></td><td><button class="btn btn-o" style="font-size:10px;padding:3px 10px;">View</button></td></tr>
+                <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#a32d2d;">GA</div><div><div class="tname">George Anderson</div><div class="temail">ganderson&#64;hotmail.com</div></div></div></td><td style="font-size:11.5px;">(323) 555-0055</td><td style="font-size:11.5px;">Tom Chen</td><td style="font-weight:700;color:#185fa5;">UHC</td><td style="font-size:11px;color:#8a94a6;">AARP PPO Plus</td><td><span class="tbadge lo">Low</span></td><td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:10%;background:#f09595;"></div></div><span style="font-size:11px;font-weight:700;">1</span></div></td><td><button class="btn btn-o" style="font-size:10px;padding:3px 10px;">View</button></td></tr>
+                <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#085041;">BW</div><div><div class="tname">Barbara Wilson</div><div class="temail">bwilson&#64;gmail.com</div></div></div></td><td style="font-size:11.5px;">(714) 555-0224</td><td style="font-size:11.5px;">Bob Broker</td><td style="font-weight:700;color:#854f0b;">AET</td><td style="font-size:11px;color:#8a94a6;">Medicare Select HMO</td><td><span class="tbadge lo">Low</span></td><td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:15%;background:#f09595;"></div></div><span style="font-size:11px;font-weight:700;">2</span></div></td><td><button class="btn btn-o" style="font-size:10px;padding:3px 10px;">View</button></td></tr>
+                <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="av" style="background:#27500a;">CT</div><div><div class="tname">Charles Taylor</div><div class="temail">ctaylor&#64;yahoo.com</div></div></div></td><td style="font-size:11.5px;">(949) 555-0312</td><td style="font-size:11.5px;">Sarah Mills</td><td style="font-weight:700;color:#533ab7;">ELV</td><td style="font-size:11px;color:#8a94a6;">Anthem MediBlue</td><td><span class="tbadge hi">High</span></td><td style="text-align:center;"><div style="display:flex;align-items:center;gap:5px;justify-content:center;"><div class="ubar"><div class="ufill" style="width:65%;background:#533ab7;"></div></div><span style="font-size:11px;font-weight:700;">11</span></div></td><td><button class="btn btn-o" style="font-size:10px;padding:3px 10px;">View</button></td></tr>
+              </tbody>
+            </table>
+            </div>
+            <div class="tpager">
+              <div style="font-size:11px;color:#8a94a6;">Showing 1–8 of 1,134 members</div>
+              <div style="display:flex;gap:4px;">
+                <button class="btn btn-o" style="font-size:11px;padding:4px 10px;">← Prev</button>
+                <button class="btn btn-g" style="font-size:11px;padding:4px 10px;">1</button>
+                <button class="btn btn-o" style="font-size:11px;padding:4px 10px;">2</button>
+                <button class="btn btn-o" style="font-size:11px;padding:4px 10px;">3</button>
+                <span style="font-size:11px;color:#aaa;padding:4px;">…</span>
+                <button class="btn btn-o" style="font-size:11px;padding:4px 10px;">142</button>
+                <button class="btn btn-o" style="font-size:11px;padding:4px 10px;">Next →</button>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /content -->
+      </div><!-- /dash-view -->
+
+      <!-- ══════════════════ MEMBER DETAIL VIEW ══════════════════ -->
+      <div id="member-view" style="display:none;flex-direction:column;">
+        <div class="topbar">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button class="btn btn-o" onclick="showDashboard()" style="font-size:11px;padding:5px 10px;">← Back</button>
+            <div><div class="topbar-title">Margaret Johnson</div><div class="topbar-sub">Member profile &amp; app activity</div></div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-o">Send Message</button>
+            <button class="btn btn-o">Schedule Call</button>
+            <button class="btn btn-g">Edit Member</button>
+          </div>
+        </div>
+        <div class="nav-tabs">
+          <div class="nav-tab on">Member Profile</div>
+          <div class="nav-tab">Activity Log</div>
+          <div class="nav-tab">Notes</div>
+          <div class="nav-tab">Documents</div>
+        </div>
+        <div class="content">
+          <div class="breadcrumb">
+            <a onclick="showDashboard()">Dashboard</a> › <a onclick="showDashboard()">Members</a> › Margaret Johnson
+          </div>
+
+          <!-- Header card -->
+          <div class="detail-header">
+            <div class="detail-av">MJ</div>
+            <div class="detail-info">
+              <div class="detail-name">Margaret Johnson</div>
+              <div class="detail-pills">
+                <span class="pill pill-g">High Utilizer</span>
+                <span class="pill pill-b">Active Member</span>
+                <span class="pill" style="background:#e1f5ee;color:#0f6e56;">Humana</span>
+              </div>
+              <div class="detail-grid">
+                <div class="dg-item"><div class="dg-lbl">Email</div><div class="dg-val">m.johnson&#64;gmail.com</div></div>
+                <div class="dg-item"><div class="dg-lbl">Phone</div><div class="dg-val">(213) 555-0142</div></div>
+                <div class="dg-item"><div class="dg-lbl">Date of Birth</div><div class="dg-val">March 14, 1952</div></div>
+                <div class="dg-item"><div class="dg-lbl">Member ID</div><div class="dg-val">HUM-2026-84721</div></div>
+                <div class="dg-item"><div class="dg-lbl">Address</div><div class="dg-val">1842 Maple Ave, Beverly Hills CA 90210</div></div>
+                <div class="dg-item"><div class="dg-lbl">Assigned Agent</div><div class="dg-val" style="color:#1d9e75;">Bob Broker</div></div>
+                <div class="dg-item"><div class="dg-lbl">Carrier</div><div class="dg-val">Humana</div></div>
+                <div class="dg-item"><div class="dg-lbl">Plan</div><div class="dg-val">Gold Plus HMO</div></div>
+                <div class="dg-item"><div class="dg-lbl">Plan ID</div><div class="dg-val">H1234-001-000</div></div>
+                <div class="dg-item"><div class="dg-lbl">Effective Date</div><div class="dg-val">Jan 1, 2026</div></div>
+                <div class="dg-item"><div class="dg-lbl">Monthly Premium</div><div class="dg-val">$0.00</div></div>
+                <div class="dg-item"><div class="dg-lbl">Enrolled Since</div><div class="dg-val">January 2023</div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Stats row -->
+          <div class="detail-stats">
+            <div class="ds-card">
+              <div class="ds-lbl">Last Login</div>
+              <div class="ds-val" style="font-size:14px;margin-top:2px;">Apr 5, 2026</div>
+              <div class="ds-sub">2:41 PM · iPhone · iOS 18</div>
+            </div>
+            <div class="ds-card">
+              <div class="ds-lbl">Total App Sessions</div>
+              <div class="ds-val">247</div>
+              <div class="ds-sub">Since Jan 1, 2026</div>
+            </div>
+            <div class="ds-card">
+              <div class="ds-lbl">Visits Past 30 Days</div>
+              <div class="ds-val">18</div>
+              <div class="ds-sub"><span style="color:#1d9e75;font-weight:600;">↑ 3</span> vs prior 30d</div>
+            </div>
+            <div class="ds-card">
+              <div class="ds-lbl">AI Chats (30d)</div>
+              <div class="ds-val">11</div>
+              <div class="ds-sub">Avg session 4m 12s</div>
+            </div>
+          </div>
+
+          <!-- App tabs mirroring mobile -->
+          <div style="font-size:12px;font-weight:700;color:#8a94a6;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Member App Activity</div>
+          <div class="mem-tabs">
+            <div class="mem-tab on" onclick="switchMemTab('chat',this)">Chat</div>
+            <div class="mem-tab" onclick="switchMemTab('rx',this)">Save on Rx</div>
+            <div class="mem-tab" onclick="switchMemTab('analytics',this)">Analytics</div>
+            <div class="mem-tab" onclick="switchMemTab('bestplan',this)">Best Plan</div>
+          </div>
+
+          <!-- CHAT panel -->
+          <div id="mem-chat" class="mem-panel on">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div style="font-size:12px;font-weight:700;color:#1a2332;">Conversation History</div>
+              <div style="font-size:11px;color:#8a94a6;">11 AI conversations in the past 30 days</div>
+            </div>
+            <div class="chat-log">
+              <div style="text-align:center;font-size:10px;color:#aaa;padding:4px 0;">April 5, 2026 — 2:38 PM</div>
+              <div class="chat-msg">
+                <div class="chat-av" style="background:#1d9e75;">AI</div>
+                <div>
+                  <div class="chat-bubble ai"><div class="chat-sender">Plan-GPT</div>Hi, I am your Medicare AI guide and can assist you with your Medicare Advantage plan. Feel free to ask me specific questions about your plan.</div>
+                  <div class="chat-time">2:38 PM</div>
+                </div>
+              </div>
+              <div class="chat-msg user">
+                <div class="chat-av" style="background:#aaa;">MJ</div>
+                <div style="align-items:flex-end;display:flex;flex-direction:column;">
+                  <div class="chat-bubble usr">What's covered under my Medicare Advantage plan?</div>
+                  <div class="chat-time" style="text-align:right;">2:39 PM</div>
+                </div>
+              </div>
+              <div class="chat-msg">
+                <div class="chat-av" style="background:#1d9e75;">AI</div>
+                <div>
+                  <div class="chat-bubble ai"><div class="chat-sender">Plan-GPT</div>Your Humana Gold Plus HMO includes all Original Medicare benefits plus dental, vision &amp; hearing, prescription drug coverage (Part D), and a $0 monthly premium with a $3,400 MOOP limit.</div>
+                  <div class="chat-time">2:39 PM</div>
+                </div>
+              </div>
+              <div class="chat-msg user">
+                <div class="chat-av" style="background:#aaa;">MJ</div>
+                <div style="align-items:flex-end;display:flex;flex-direction:column;">
+                  <div class="chat-bubble usr">Can I get a cheaper version of my blood pressure medication?</div>
+                  <div class="chat-time" style="text-align:right;">2:40 PM</div>
+                </div>
+              </div>
+              <div class="chat-msg">
+                <div class="chat-av" style="background:#1d9e75;">AI</div>
+                <div>
+                  <div class="chat-bubble ai"><div class="chat-sender">Plan-GPT</div>Yes! Generic lisinopril is on your plan's Tier 1 formulary at $0/mo at CVS — a significant savings vs. brand-name Zestril at $54/mo.<br><br><span class="chat-tag">💊 Rx recommendation sent</span></div>
+                  <div class="chat-time">2:41 PM</div>
+                </div>
+              </div>
+              <div style="text-align:center;font-size:10px;color:#aaa;padding:4px 0;">April 3, 2026 — 10:14 AM</div>
+              <div class="chat-msg user">
+                <div class="chat-av" style="background:#aaa;">MJ</div>
+                <div style="align-items:flex-end;display:flex;flex-direction:column;">
+                  <div class="chat-bubble usr">Do I need a referral to see a specialist?</div>
+                  <div class="chat-time" style="text-align:right;">10:14 AM</div>
+                </div>
+              </div>
+              <div class="chat-msg">
+                <div class="chat-av" style="background:#1d9e75;">AI</div>
+                <div>
+                  <div class="chat-bubble ai"><div class="chat-sender">Plan-GPT</div>Yes — as an HMO member, you'll need a referral from your primary care physician before seeing most specialists. Make sure your specialist is in the Humana network to avoid higher costs.</div>
+                  <div class="chat-time">10:14 AM</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SAVE ON RX panel -->
+          <div id="mem-rx" class="mem-panel">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#1a2332;">Prescription Lookup</div>
+                <div style="font-size:11px;color:#8a94a6;">Search area: 90210 — Beverly Hills · 2 mi radius</div>
+              </div>
+              <span class="tbadge hi">Last updated Apr 5, 2026</span>
+            </div>
+            <table class="rx-table">
+              <thead><tr>
+                <th>Drug / Dosage</th><th>Tier</th><th style="background:#f0fdf8;color:#0f6e56;">CVS Pharmacy <span style="font-weight:400;font-style:italic;">0.4 mi · Best</span></th><th>Walgreens <span style="font-weight:400;font-style:italic;">0.9 mi</span></th><th>Rite Aid <span style="font-weight:400;font-style:italic;">1.7 mi</span></th><th>Brand Savings</th>
+              </tr></thead>
+              <tbody>
+                <tr>
+                  <td><div class="rx-name">Lisinopril 10mg</div><div class="rx-gen">Generic · replaces Zestril · 30-day</div></td>
+                  <td><span class="tbadge hi">Tier 1</span></td>
+                  <td style="background:#f5fdf9;"><strong class="rx-best">$0.00</strong></td>
+                  <td>$0.00</td>
+                  <td>$3.00</td>
+                  <td style="color:#1d9e75;font-weight:700;">Save $54/mo</td>
+                </tr>
+                <tr>
+                  <td><div class="rx-name">Atorvastatin 20mg</div><div class="rx-gen">Generic · replaces Lipitor · 30-day</div></td>
+                  <td><span class="tbadge hi">Tier 1</span></td>
+                  <td style="background:#f5fdf9;"><strong class="rx-best">$8.00</strong></td>
+                  <td>$11.00</td>
+                  <td>$14.00</td>
+                  <td style="color:#1d9e75;font-weight:700;">Save $112/mo</td>
+                </tr>
+                <tr>
+                  <td><div class="rx-name">Metformin 500mg</div><div class="rx-gen">Generic · replaces Glucophage · 30-day</div></td>
+                  <td><span class="tbadge hi">Tier 1</span></td>
+                  <td style="background:#f5fdf9;"><strong class="rx-best">$0.00</strong></td>
+                  <td>$4.00</td>
+                  <td>$7.00</td>
+                  <td style="color:#1d9e75;font-weight:700;">Save $65/mo</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="margin-top:10px;background:#e1f5ee;border-radius:8px;padding:9px 12px;font-size:11.5px;color:#085041;border:1px solid #9fe1cb;">
+              <strong>MTM Alert:</strong> Member has not yet enrolled in the free Medication Therapy Management (MTM) benefit available through her plan. Recommend outreach.
+            </div>
+          </div>
+
+          <!-- ANALYTICS panel -->
+          <div id="mem-analytics" class="mem-panel">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#1a2332;margin-bottom:10px;">2026 Plan Year — Current</div>
+                <div class="an-stats">
+                  <div class="an-stat"><div class="an-stat-lbl">Medical Deductible</div><div class="an-stat-val">$320</div><div class="an-stat-sub">of $500</div></div>
+                  <div class="an-stat"><div class="an-stat-lbl">Rx Deductible</div><div class="an-stat-val">$250</div><div class="an-stat-sub">of $650</div></div>
+                  <div class="an-stat"><div class="an-stat-lbl">Total OOP</div><div class="an-stat-val">$1,240</div><div class="an-stat-sub">of $3,400 MOOP</div></div>
+                </div>
+                <div style="font-size:11px;font-weight:600;color:#8a94a6;margin-bottom:6px;">Accumulator Progress</div>
+                <div class="an-bar-row">
+                  <div class="an-bar-lbl">Medical Deductible</div>
+                  <div class="an-bar-track"><div class="an-bar-fill" style="width:64%;"></div></div>
+                  <div class="an-bar-val">$320 / $500</div>
+                </div>
+                <div class="an-bar-row">
+                  <div class="an-bar-lbl">Rx Deductible</div>
+                  <div class="an-bar-track"><div class="an-bar-fill" style="width:38%;"></div></div>
+                  <div class="an-bar-val">$250 / $650</div>
+                </div>
+                <div class="an-bar-row">
+                  <div class="an-bar-lbl">Out-of-Pocket vs MOOP</div>
+                  <div class="an-bar-track"><div class="an-bar-fill" style="width:36%;"></div></div>
+                  <div class="an-bar-val">$1,240 / $3,400</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;">
+                  <div class="an-stat"><div class="an-stat-lbl">Benefit After Rx Ded.</div><div class="an-stat-val">$0</div><div class="an-stat-sub" style="color:#aaa;">Not yet met</div></div>
+                  <div class="an-stat"><div class="an-stat-lbl">Benefit After OOPM</div><div class="an-stat-val">$0</div><div class="an-stat-sub" style="color:#aaa;">Not yet met</div></div>
+                </div>
+                <div class="an-note" style="margin-top:10px;">
+                  <span>⚠</span>
+                  <span>On track for deductible &amp; MOOP. Extra Benefits (wellness, acupuncture, gym) not yet utilized — recommend agent outreach.</span>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#1a2332;margin-bottom:10px;">2025 Plan Year — Completed</div>
+                <div class="an-stats">
+                  <div class="an-stat" style="border-color:#c0dd97;"><div class="an-stat-lbl">Medical Deductible</div><div class="an-stat-val" style="color:#639922;">$500 ✓</div><div class="an-stat-sub" style="color:#639922;">Met in full</div></div>
+                  <div class="an-stat" style="border-color:#c0dd97;"><div class="an-stat-lbl">Rx Deductible</div><div class="an-stat-val" style="color:#639922;">$650 ✓</div><div class="an-stat-sub" style="color:#639922;">Met in full</div></div>
+                  <div class="an-stat" style="border-color:#c0dd97;"><div class="an-stat-lbl">Total OOP</div><div class="an-stat-val" style="color:#639922;">$3,400 ✓</div><div class="an-stat-sub" style="color:#639922;">MOOP met</div></div>
+                </div>
+                <div style="font-size:11px;font-weight:600;color:#8a94a6;margin-bottom:6px;">Accumulator Progress</div>
+                <div class="an-bar-row">
+                  <div class="an-bar-lbl">Medical Deductible</div>
+                  <div class="an-bar-track"><div class="an-bar-fill" style="width:100%;background:#639922;"></div></div>
+                  <div class="an-bar-val" style="color:#639922;">$500 / $500 ✓</div>
+                </div>
+                <div class="an-bar-row">
+                  <div class="an-bar-lbl">Rx Deductible</div>
+                  <div class="an-bar-track"><div class="an-bar-fill" style="width:100%;background:#639922;"></div></div>
+                  <div class="an-bar-val" style="color:#639922;">$650 / $650 ✓</div>
+                </div>
+                <div class="an-bar-row">
+                  <div class="an-bar-lbl">Out-of-Pocket vs MOOP</div>
+                  <div class="an-bar-track"><div class="an-bar-fill" style="width:100%;background:#639922;"></div></div>
+                  <div class="an-bar-val" style="color:#639922;">$3,400 / $3,400 ✓</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;">
+                  <div class="an-stat" style="border-color:#c0dd97;"><div class="an-stat-lbl">Benefit After Rx Ded.</div><div class="an-stat-val" style="color:#639922;">$1,125.44</div><div class="an-stat-sub" style="color:#639922;font-weight:600;">Deductible met</div></div>
+                  <div class="an-stat" style="border-color:#c0dd97;"><div class="an-stat-lbl">Benefit After OOPM</div><div class="an-stat-val" style="color:#639922;">$17,220</div><div class="an-stat-sub" style="color:#639922;font-weight:600;">MOOP met</div></div>
+                </div>
+                <div style="margin-top:10px;background:#eaf3de;border:1px solid #c0dd97;border-radius:8px;padding:9px 12px;font-size:11.5px;color:#27500a;display:flex;gap:7px;">
+                  <span>✓</span><span>Member met deductible and out-of-pocket maximum in full during 2025 plan year.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- BEST PLAN panel -->
+          <div id="mem-bestplan" class="mem-panel">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#1a2332;margin-bottom:3px;">2027 AEP Plan Recommendations</div>
+                <div style="font-size:11px;color:#8a94a6;">Based on 2026 medical &amp; drug utilization · AEP: Oct 15 – Dec 7, 2026</div>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button class="btn btn-o" style="font-size:11px;">Schedule Appointment</button>
+                <button class="btn btn-g" style="font-size:11px;">Call Member</button>
+              </div>
+            </div>
+            <div style="background:#f4f6f8;border-radius:9px;padding:12px 14px;margin-bottom:14px;border:1px solid #e4e8ed;font-size:12px;color:#3c4a5a;line-height:1.65;">
+              Based upon Margaret's medical and drug utilization in 2026, we recommend that she stay on her existing plan for 2027. Compared to the other lowest estimated cost plans, her current Humana plan is the lowest estimated cost.
+              <div style="margin-top:6px;font-size:11px;color:#8a94a6;border-top:1px solid #e4e8ed;padding-top:6px;">Please consult with the assigned agent (Bob Broker) before any plan changes.</div>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:#8a94a6;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Recommended Plan</div>
+            <div class="plan-rec">
+              <div class="plan-rec-head">
+                <div class="plan-rec-title">★ Stay on Current Plan for 2027 — Lowest Estimated Cost</div>
+                <span class="tbadge hi">Recommended</span>
+              </div>
+              <div style="padding:12px 14px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;">
+                <div><div style="font-size:10px;color:#8a94a6;margin-bottom:2px;">Plan Name</div><div style="font-size:12px;font-weight:700;color:#1a2332;">Humana Gold Plus HMO</div></div>
+                <div><div style="font-size:10px;color:#8a94a6;margin-bottom:2px;">Monthly Premium</div><div style="font-size:20px;font-weight:800;color:#1d9e75;">$0</div></div>
+                <div><div style="font-size:10px;color:#8a94a6;margin-bottom:2px;">Est. Annual OOPM</div><div style="font-size:20px;font-weight:800;color:#1d9e75;">$3,400</div></div>
+                <div><div style="font-size:10px;color:#8a94a6;margin-bottom:2px;">Star Rating</div><div style="font-size:20px;font-weight:800;color:#1d9e75;">4.5 ★</div></div>
+              </div>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:#8a94a6;text-transform:uppercase;letter-spacing:0.4px;margin:12px 0 8px;">Other Plans Compared</div>
+            <table class="plan-compare" style="width:100%;border-collapse:collapse;">
+              <thead><tr>
+                <th>Plan</th><th>Type</th><th>Star Rating</th><th>Monthly Premium</th><th>Est. Annual OOPM</th>
+              </tr></thead>
+              <tbody>
+                <tr><td style="font-weight:700;">Aetna Medicare Advantage PPO</td><td>PPO</td><td>4.7 ★</td><td class="plan-higher">$29/mo</td><td class="plan-higher">$4,200</td></tr>
+                <tr><td style="font-weight:700;">UHC AARP HMO</td><td>HMO</td><td>4.4 ★</td><td class="plan-higher">$42/mo</td><td class="plan-higher">$4,900</td></tr>
+                <tr><td style="font-weight:700;">Cigna Healthspring HMO</td><td>HMO</td><td>4.2 ★</td><td class="plan-higher">$58/mo</td><td class="plan-higher">$5,500</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+        </div><!-- /content -->
+      </div><!-- /member-view -->
+
+    </div><!-- /main -->
+  </div><!-- /app -->
+</div><!-- /browser -->
+
+<script>
+function showMember(){
+  document.getElementById('dash-view').style.display='none';
+  document.getElementById('member-view').style.display='flex';
+  document.getElementById('url-bar').textContent='plangpt.cercahealth.com/members/margaret-johnson';
+}
+function showDashboard(){
+  document.getElementById('member-view').style.display='none';
+  document.getElementById('dash-view').style.display='block';
+  document.getElementById('url-bar').textContent='plangpt.cercahealth.com/dashboard';
+}
+function switchMemTab(id, el){
+  document.querySelectorAll('.mem-panel').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.mem-tab').forEach(t=>t.classList.remove('on'));
+  document.getElementById('mem-'+id).classList.add('on');
+  el.classList.add('on');
+}
+</script>
+</body>
+</html>

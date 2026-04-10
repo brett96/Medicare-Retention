@@ -120,11 +120,9 @@ flowchart LR
 
 ### Multi-payer FHIR proxy behavior (`auth_views.py` + `payers.py`)
 
-- **`PayerConfig`** (in **`medicare_retention_api/payers.py`**) drives OAuth URLs, **`aud`** (Aetna uses a sandbox audience **different** from the FHIR API base), scopes, **`patient_lookup_mode`** (`path` vs `Patient?_id=`), and **`fhir_unsupported_resources`** (types that return an **empty search `Bundle`** with **200** instead of calling the payer—avoids 400/404 noise in the handoff UI).
-- **Patient bundle unwrap**: Cigna (and similar) may return a **search `Bundle`** for `Patient?_id=...`. The proxy returns a **single `Patient`**, preferring **`id`** prefixed with **`gov-`** when multiple entries exist (downstream compartment reads align with that id where applicable).
-- **Cigna — full proxy** (default in code, **`CIGNA_LEGACY_FHIR_PROXY=0`**): optional **`&_count=`**, follows **`Bundle.link`** **`next`** (same env knobs as other payers), **dual-patient merge** for **ExplanationOfBenefit** and **MedicationRequest** when the client passes **`merge_patient_id`** (handoff app sends it when **`Patient.id`** ≠ token `patient` id, e.g. **`A000…`** vs **`gov-*`**). Set **`CIGNA_LEGACY_FHIR_PROXY=1`** to revert to a single GET per resource with **no** merge/pagination.
-- **Cigna — legacy proxy** (**`CIGNA_LEGACY_FHIR_PROXY=1`**): one GET per resource, **no** `&_count=`, **no** `next` merge, **no** dual-patient merge. Types in **`_CIGNA_FHIR_UNSUPPORTED`** return an **empty `Bundle`** without calling Cigna.
-- **Cigna — mobile handoff**: compartment queries use the **token / userinfo `patient` id**; when the returned **`Patient.id`** differs, **`merge_patient_id`** is appended. The API also **follows `Patient` search Bundle `next` links** (when **`CIGNA_PATIENT_BUNDLE_PAGINATION=1`**) and, for **EOB** / **MedicationRequest**, **auto-merges** every linked **`Patient.id`** found there (**`CIGNA_AUTO_MERGE_PATIENT_IDS=1`**) so **pharmacy** CARIN-BB EOBs tied to **`gov-*`** are not dropped when **`esi-*`** appears on the first page.
+- **`PayerConfig`** (in **`medicare_retention_api/payers.py`**) drives OAuth URLs, **`aud`** (Aetna uses a sandbox audience **different** from the FHIR API base), scopes, **`patient_lookup_mode`** (`path` vs `Patient?_id=`), and **`fhir_unsupported_resources`** (for **Elevance / Aetna** only: types that return an **empty search `Bundle`** with **200** instead of calling the payer).
+- **Patient bundle unwrap**: Cigna (and similar) may return a **search `Bundle`** for `Patient?_id=...`. The proxy returns a **single `Patient`**, preferring **`id`** prefixed with **`gov-`** when multiple entries exist.
+- **Cigna FHIR proxy**: **no** `&_count=`; types in **`_CIGNA_FHIR_UNSUPPORTED`** return an **empty search `Bundle` (200)** without calling the payer. For **Coverage**, **Encounter**, **ExplanationOfBenefit**, and **MedicationRequest**, when **`Patient.id`** ≠ token **`patient`** id, the handoff app sends **`merge_patient_id`** (token id); the API **merges** both compartment searches (deduped) and follows **`Bundle.link` “next”** when **`FHIR_PROXY_FOLLOW_BUNDLE_NEXT=1`**. Other compartment types use a **single** GET with pagination when enabled.
 - **Elevance / Aetna**: optional **`FHIR_DEFAULT_SEARCH_COUNT`** (`&_count=`); **`FHIR_PROXY_FOLLOW_BUNDLE_NEXT`** (default **`1`**) and **`FHIR_PROXY_MAX_PAGES`** merge paged **`Bundle`** responses. Set **`FHIR_PROXY_FOLLOW_BUNDLE_NEXT=0`** for first-page-only.
 - **Aetna authorize URL**: built with **`build_oauth_authorize_query_string`** so **`scope`** keeps a **literal `*`** in `patient/*.read` (some IdP UIs mishandle `%2A`). Optional **`AETNA_APP_NAME`** → `appname` query param. **Claim / ClaimResponse** (and **MedicationStatement**) are treated as unsupported for Aetna where the API returns **404** / not-implemented.
 - **OperationOutcome handling**: for some payers, specific **`not-supported`** outcomes are mapped to an empty **`Bundle`**; the match is **narrow** (e.g. wording like “resource not available”) so real errors are not swallowed.
@@ -144,7 +142,6 @@ flowchart LR
 - **Optional:** `CIGNA_CLIENT_SECRET` — omit when Cigna did not issue a secret (public client + PKCE)
 - **Optional URL overrides** (sandbox defaults are built into `payers.py` from [Cigna Patient Access sandbox](https://developer.cigna.com/docs/service-apis/patient-access/sandbox)): `CIGNA_AUTH_URL`, `CIGNA_TOKEN_URL`, `CIGNA_FHIR_BASE_URL`, `CIGNA_USERINFO_URL`
 - `CIGNA_SCOPE` (optional)
-- **`CIGNA_LEGACY_FHIR_PROXY`** — default **`0`**: full Cigna FHIR path (pagination, optional **`merge_patient_id`** merge for EOB/MedRequest). Set **`1`** for legacy single-GET behavior without merge/pagination.
 
 **Aetna Patient Access (sandbox defaults in `payers.py`; confidential client + PKCE)**
 
@@ -182,7 +179,7 @@ flowchart LR
 
 - `FHIR_HTTP_CONNECT_TIMEOUT_S`, `FHIR_HTTP_READ_TIMEOUT_S` — override defaults (**20** / **90** s); legacy aliases `ELEVANCE_HTTP_*` still work
 
-**FHIR proxy pagination / page size** (Elevance, Aetna, and Cigna unless **`CIGNA_LEGACY_FHIR_PROXY=1`**)
+**FHIR proxy pagination / page size** (Elevance and Aetna only; not used for Cigna)
 
 - `FHIR_DEFAULT_SEARCH_COUNT` — optional; appended as **`&_count=`** on compartment searches when set
 - `FHIR_PROXY_FOLLOW_BUNDLE_NEXT` — default **`1`**; set **`0`** to disable following **`Bundle.link`** **`next`**
@@ -260,7 +257,7 @@ The repo root **`.vercelignore`** must **not** ignore the entire **`mobile/`** t
 
 3. The browser sends **`POST https://<api-host>/api/auth/exchange/`** with the one-time `code` (CORS allows this for POC; lock down **`CORS_ALLOWED_ORIGINS`** in production).
 
-4. With the returned **`access_token`**, the handoff UI calls **`GET`** on the FHIR proxy on the **same API host** — e.g. **`/api/fhir/<payer_id>/Patient/?patient_id=...`** (Elevance shorthand **`/api/fhir/patient/`** still works) — with **`Authorization: Bearer ...`**. The mobile handoff uses the returned **`payer_id`** and, for Cigna, the token **`patient`** id for compartment reads.
+4. With the returned **`access_token`**, the handoff UI calls **`GET`** on the FHIR proxy on the **same API host** — e.g. **`/api/fhir/<payer_id>/Patient/?patient_id=...`** (Elevance shorthand **`/api/fhir/patient/`** still works) — with **`Authorization: Bearer ...`**. The handoff loads Patient with the token **`patient`** id, then uses the returned **`Patient.id`** for Coverage, EOB, and other compartment reads when available (all payers, including Cigna).
 
 5. **`EXPO_PUBLIC_API_BASE_URL`** (optional) can override the API base for local web dev; production usually relies on **`api_base`** from the redirect.
 
@@ -292,7 +289,7 @@ See `scripts/README.md` for a shorter quick start.
 See **[mobile/README.md](mobile/README.md)** for dependency hygiene (avoid `npm audit fix --force`, use `npx expo install`), OAuth handoff, and **Expo web on Vercel** troubleshooting.
 
 - **Expo + Dev Client** so native modules (llama, SQLite) are usable on **iOS/Android**.
-- **Expo web** (`npx expo start --web` / `npx expo export -p web`): same React Native code targets a **static** bundle for the **sign-in handoff** page (patient summary, coverage, encounters, EOB / pharmacy-oriented summaries, medication requests where returned) after redirect from Django; payer-specific FHIR behavior is handled by the API (**`HandoffScreen`** uses token **`patient`** for Cigna compartment calls). **Technical details** (tokens, raw FHIR JSON) are behind a toggle.
+- **Expo web** (`npx expo start --web` / `npx expo export -p web`): same React Native code targets a **static** bundle for the **sign-in handoff** page (patient summary, coverage, encounters, EOB / pharmacy-oriented summaries, medication requests where returned) after redirect from Django; payer-specific FHIR behavior is handled by the API (**`HandoffScreen`** uses **`Patient.id`** from the Patient response for compartment calls when present). **Technical details** (tokens, raw FHIR JSON) are behind a toggle.
 - **`ModelManager`**: downloads `.gguf` from an HTTPS URL into app document storage with progress.
 - **`LlamaService`**: loads the model via `@react-native-ai/llama` (`languageModel` + `textEmbeddingModel`), exposes completion and embedding helpers used by the RAG scaffold.
 - **`LocalVectorStore`**: SQLite persistence for chunk text + embedding vectors; similarity search is implemented in-process in the POC (ready to swap for **sqlite-vss** when the native extension is available in your build).

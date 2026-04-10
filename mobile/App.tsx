@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Linking,
+  Modal,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -12,17 +13,16 @@ import {
 
 import { HandoffScreen } from "./src/screens/HandoffScreen";
 import { LoginScreen } from "./src/screens/LoginScreen";
+import { MedicareHelperScreen } from "./src/screens/MedicareHelperScreen";
 import { SetupModelScreen } from "./src/screens/SetupModelScreen";
 import { TestPromptScreen } from "./src/screens/TestPromptScreen";
 
-type Screen = "setup" | "prompt" | "handoff" | "login";
+type DevScreen = "setup" | "prompt" | "handoff" | "login";
 
 function looksLikeHandoffUrl(url: string): boolean {
   if (url.includes("/handoff") || url.includes("://oauth/callback") || url.includes("/callback")) {
     return true;
   }
-  // Expo web on Vercel: prefer APP_HANDOFF_URL_BASE=https://your-expo.vercel.app (no path) so the
-  // redirect is /?code=...&api_base=... — always serves index.html. /handoff needs SPA rewrites.
   try {
     const u = new URL(url);
     if (u.searchParams.has("code") && u.searchParams.has("api_base")) {
@@ -35,7 +35,8 @@ function looksLikeHandoffUrl(url: string): boolean {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>("setup");
+  const [devOpen, setDevOpen] = useState(false);
+  const [devScreen, setDevScreen] = useState<DevScreen>("setup");
   const [handoffUrl, setHandoffUrl] = useState<string | undefined>(undefined);
   const [modelUrl, setModelUrl] = useState<string>(
     "https://example-bucket.s3.amazonaws.com/models/phi-3-mini-q4.gguf"
@@ -46,22 +47,18 @@ export default function App() {
     let sub: any | null = null;
 
     const boot = async () => {
-      // Web: use the current URL path/query.
       if (Platform.OS === "web" && typeof window !== "undefined") {
         const href = window.location.href;
         if (looksLikeHandoffUrl(href)) {
           setHandoffUrl(href);
-          setScreen("handoff");
         }
         return;
       }
 
-      // Native: handle deep links like medicare-retention://oauth/callback?code=...
       try {
         const initial = await Linking.getInitialURL();
         if (initial && looksLikeHandoffUrl(initial)) {
           setHandoffUrl(initial);
-          setScreen("handoff");
         }
       } catch {
         // ignore
@@ -70,7 +67,6 @@ export default function App() {
       sub = Linking.addEventListener("url", (evt: { url: string }) => {
         if (evt?.url && looksLikeHandoffUrl(evt.url)) {
           setHandoffUrl(evt.url);
-          setScreen("handoff");
         }
       });
     };
@@ -91,8 +87,8 @@ export default function App() {
     []
   );
 
-  const screenEl = useMemo(() => {
-    switch (screen) {
+  const devScreenEl = useMemo(() => {
+    switch (devScreen) {
       case "setup":
         return <SetupModelScreen modelUrl={modelUrl} modelFilename={modelFilename} />;
       case "prompt":
@@ -102,108 +98,145 @@ export default function App() {
       case "login":
         return <LoginScreen defaultApiBase={defaultApiBase} />;
     }
-  }, [defaultApiBase, modelFilename, modelUrl, screen, handoffUrl]);
+  }, [defaultApiBase, devScreen, modelFilename, modelUrl, handoffUrl]);
+
+  const outerBg = { backgroundColor: "#f5faf6" } as const;
+
+  if (Platform.OS === "web" && typeof window !== "undefined" && looksLikeHandoffUrl(window.location.href)) {
+    const href = typeof window !== "undefined" ? window.location.href : undefined;
+    return (
+      <SafeAreaView style={[{ flex: 1, minHeight: 0 }, outerBg]}>
+        <HandoffScreen initialUrl={handoffUrl ?? href} />
+      </SafeAreaView>
+    );
+  }
+
+  if (Platform.OS !== "web" && handoffUrl && looksLikeHandoffUrl(handoffUrl)) {
+    return (
+      <SafeAreaView style={[{ flex: 1, minHeight: 0 }, outerBg]}>
+        <HandoffScreen initialUrl={handoffUrl} />
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
-      {screen === "handoff" ? (
-        <HandoffScreen initialUrl={handoffUrl} />
-      ) : (
-      <ScrollView contentInsetAdjustmentBehavior="automatic" style={{ flex: 1, padding: 16 }}>
-        <Text style={{ fontSize: 20, fontWeight: "600" }}>Medicare Retention Edge-AI POC</Text>
+    <SafeAreaView style={[{ flex: 1, minHeight: 0 }, outerBg]}>
+      <MedicareHelperScreen onOpenDevTools={() => setDevOpen(true)} />
 
-        <View style={{ height: 12 }} />
-
-        <Text style={{ fontWeight: "600" }}>Model S3 URL</Text>
-        <TextInput
-          value={modelUrl}
-          onChangeText={setModelUrl}
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={{
-            borderWidth: 1,
-            borderColor: "#ccc",
-            padding: 10,
-            borderRadius: 8,
-            marginTop: 6,
-          }}
-        />
-
-        <View style={{ height: 12 }} />
-
-        <Text style={{ fontWeight: "600" }}>Local filename</Text>
-        <TextInput
-          value={modelFilename}
-          onChangeText={setModelFilename}
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={{
-            borderWidth: 1,
-            borderColor: "#ccc",
-            padding: 10,
-            borderRadius: 8,
-            marginTop: 6,
-          }}
-        />
-
-        <View style={{ height: 12 }} />
-
-        <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" as any }}>
-          <TouchableOpacity
-            onPress={() => setScreen("setup")}
+      <Modal visible={devOpen} animationType="slide" onRequestClose={() => setDevOpen(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: "#fff" }}>
+          <View
             style={{
-              paddingVertical: 10,
-              paddingHorizontal: 14,
-              borderRadius: 10,
-              backgroundColor: screen === "setup" ? "#111" : "#eee",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: "#e4e8ed",
             }}
           >
-            <Text style={{ color: screen === "setup" ? "#fff" : "#111" }}>Setup model</Text>
-          </TouchableOpacity>
+            <Text style={{ fontSize: 17, fontWeight: "700", color: "#1a2332" }}>Developer tools</Text>
+            <TouchableOpacity onPress={() => setDevOpen(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Text style={{ fontSize: 16, fontWeight: "600", color: "#1d9e75" }}>Done</Text>
+            </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity
-            onPress={() => setScreen("prompt")}
-            style={{
-              paddingVertical: 10,
-              paddingHorizontal: 14,
-              borderRadius: 10,
-              backgroundColor: screen === "prompt" ? "#111" : "#eee",
-            }}
-          >
-            <Text style={{ color: screen === "prompt" ? "#fff" : "#111" }}>Test prompt</Text>
-          </TouchableOpacity>
+          <ScrollView contentInsetAdjustmentBehavior="automatic" style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+            <Text style={{ fontSize: 15, color: "#555", marginBottom: 12, lineHeight: 22 }}>
+              Edge-AI POC: model download, prompts, payer OAuth handoff, and FHIR login.
+            </Text>
 
-          <TouchableOpacity
-            onPress={() => setScreen("handoff")}
-            style={{
-              paddingVertical: 10,
-              paddingHorizontal: 14,
-              borderRadius: 10,
-              backgroundColor: "#eee",
-            }}
-          >
-            <Text style={{ color: "#111" }}>Handoff</Text>
-          </TouchableOpacity>
+            <Text style={{ fontWeight: "600" }}>Model S3 URL</Text>
+            <TextInput
+              value={modelUrl}
+              onChangeText={setModelUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                borderWidth: 1,
+                borderColor: "#ccc",
+                padding: 10,
+                borderRadius: 8,
+                marginTop: 6,
+              }}
+            />
 
-          <TouchableOpacity
-            onPress={() => setScreen("login")}
-            style={{
-              paddingVertical: 10,
-              paddingHorizontal: 14,
-              borderRadius: 10,
-              backgroundColor: screen === "login" ? "#111" : "#eee",
-            }}
-          >
-            <Text style={{ color: screen === "login" ? "#fff" : "#111" }}>Connect payer</Text>
-          </TouchableOpacity>
-        </View>
+            <View style={{ height: 12 }} />
 
-        <View style={{ height: 16 }} />
+            <Text style={{ fontWeight: "600" }}>Local filename</Text>
+            <TextInput
+              value={modelFilename}
+              onChangeText={setModelFilename}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                borderWidth: 1,
+                borderColor: "#ccc",
+                padding: 10,
+                borderRadius: 8,
+                marginTop: 6,
+              }}
+            />
 
-        {screenEl}
-      </ScrollView>
-      )}
+            <View style={{ height: 16 }} />
+
+            <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" as any }}>
+              <TouchableOpacity
+                onPress={() => setDevScreen("setup")}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderRadius: 10,
+                  backgroundColor: devScreen === "setup" ? "#1a2332" : "#eee",
+                }}
+              >
+                <Text style={{ color: devScreen === "setup" ? "#fff" : "#111" }}>Setup model</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setDevScreen("prompt")}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderRadius: 10,
+                  backgroundColor: devScreen === "prompt" ? "#1a2332" : "#eee",
+                }}
+              >
+                <Text style={{ color: devScreen === "prompt" ? "#fff" : "#111" }}>Test prompt</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setDevScreen("handoff")}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderRadius: 10,
+                  backgroundColor: devScreen === "handoff" ? "#1a2332" : "#eee",
+                }}
+              >
+                <Text style={{ color: devScreen === "handoff" ? "#fff" : "#111" }}>Handoff</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setDevScreen("login")}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderRadius: 10,
+                  backgroundColor: devScreen === "login" ? "#1a2332" : "#eee",
+                }}
+              >
+                <Text style={{ color: devScreen === "login" ? "#fff" : "#111" }}>Connect payer</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ height: 16 }} />
+
+            {devScreenEl}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
-
