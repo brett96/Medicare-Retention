@@ -326,7 +326,7 @@ function ChatPanel({ extraUserMessages, layoutWide }: { extraUserMessages: strin
   const pad = layoutWide ? styles.scrollPadWide : styles.scrollPad;
   return (
     <ScrollView
-      style={styles.scroll}
+      style={[styles.scroll, layoutWide && styles.scrollWide]}
       contentContainerStyle={pad}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
@@ -351,7 +351,7 @@ function ChatPanel({ extraUserMessages, layoutWide }: { extraUserMessages: strin
           </>
         }
       />
-      <View style={styles.userWrap}>
+      <View style={[styles.userWrap, layoutWide && styles.userWrapWide]}>
         <View style={[styles.userBubble, layoutWide && styles.userBubbleWide]}>
           <Text style={styles.userText}>What's covered under my Medicare Advantage plan?</Text>
         </View>
@@ -393,7 +393,7 @@ function ChatPanel({ extraUserMessages, layoutWide }: { extraUserMessages: strin
         }
       />
       {extraUserMessages.map((text, i) => (
-        <View key={`u-${i}`} style={styles.userWrap}>
+        <View key={`u-${i}`} style={[styles.userWrap, layoutWide && styles.userWrapWide]}>
           <View style={[styles.userBubble, layoutWide && styles.userBubbleWide]}>
             <Text style={styles.userText}>{text}</Text>
           </View>
@@ -414,7 +414,7 @@ function Bullet({ text, highlight }: { text: string; highlight: boolean }) {
 
 function MsgRow({ body, layoutWide }: { body: React.ReactNode; layoutWide?: boolean }) {
   return (
-    <View style={styles.msgRow}>
+    <View style={[styles.msgRow, layoutWide && styles.msgRowWide]}>
       <View style={[styles.aiAv, layoutWide && styles.aiAvWide]}>
         <Feather name="shield" size={layoutWide ? 16 : 14} color={c.white} />
       </View>
@@ -1054,12 +1054,24 @@ const styles = StyleSheet.create({
   },
   railPrimaryBtnTxt: { fontSize: 14, fontWeight: "700", color: c.white },
   railHint: { flex: 1, fontSize: 12, color: c.primaryDeep, lineHeight: 18 },
-  scrollPadWide: { paddingHorizontal: 28, paddingVertical: 20, paddingBottom: 32, gap: 14 },
+  scrollPadWide: {
+    paddingHorizontal: 28,
+    paddingVertical: 20,
+    paddingBottom: 32,
+    gap: 14,
+    /** Without full-width content, flex rows collapse on web and text stacks one character per line. */
+    width: "100%",
+    maxWidth: "100%",
+  },
+  msgRowWide: {
+    width: "100%",
+    maxWidth: "100%",
+    alignSelf: "stretch",
+  },
   aiBubbleWide: {
-    flexGrow: 0,
-    flexShrink: 1,
+    flex: 1,
+    minWidth: 0,
     maxWidth: 720,
-    alignSelf: "flex-start",
   },
   aiAvWide: { width: 34, height: 34, borderRadius: 17 },
   userBubbleWide: { maxWidth: 560 },
@@ -1144,6 +1156,8 @@ const styles = StyleSheet.create({
   tabLblOff: { color: c.muted },
   panelWrap: { flex: 1, minHeight: 0 },
   scroll: { flex: 1, minHeight: 0 },
+  /** Lets the scroll view consume full width of the center column on web (wide layout). */
+  scrollWide: { alignSelf: "stretch", width: "100%" },
   scrollPad: { padding: 14, paddingBottom: 24, gap: 12 },
   msgRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
   aiAv: {
@@ -1185,6 +1199,7 @@ const styles = StyleSheet.create({
   },
   tipText: { flex: 1, fontSize: 13, color: c.primaryDark, fontStyle: "italic", lineHeight: 20 },
   userWrap: { alignItems: "flex-end" },
+  userWrapWide: { width: "100%", alignSelf: "stretch" },
   userBubble: {
     maxWidth: "85%",
     backgroundColor: c.primary,
