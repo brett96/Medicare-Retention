@@ -1,20 +1,32 @@
 import { Feather } from "@expo/vector-icons";
 import React, { useCallback, useState } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  Image,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from "react-native";
 
 import { planGpt as c } from "../theme/planGpt";
 
-/** Centers a phone-width column on large web viewports (matches mobile layout). */
-const WEB_PHONE_SHELL =
-  Platform.OS === "web"
-    ? ({
-        maxWidth: 430,
-        width: "100%",
-        alignSelf: "center",
-        minHeight: 0,
-        boxShadow: "0 12px 40px rgba(0,0,0,0.14)",
-      } as const)
-    : undefined;
+/** Viewports this wide (or wider) use the desktop / tablet-landscape shell. */
+export const MEDICARE_LAYOUT_WIDE_MIN_WIDTH = 900;
+
+function narrowWebPhoneShell(wide: boolean) {
+  if (Platform.OS !== "web" || wide) return undefined;
+  return {
+    maxWidth: 430,
+    width: "100%" as const,
+    alignSelf: "center" as const,
+    minHeight: 0,
+    boxShadow: "0 12px 40px rgba(0,0,0,0.14)",
+  } as const;
+}
 
 export type MedicareTabId = "chat" | "rx" | "videos" | "analytics" | "plan" | "agent";
 
@@ -37,6 +49,9 @@ const webChatInputReset =
   Platform.OS === "web" ? ({ outlineStyle: "none" as const, borderWidth: 0 } as const) : null;
 
 export function MedicareHelperScreen({ onOpenDevTools }: Props) {
+  const { width } = useWindowDimensions();
+  const wide = width >= MEDICARE_LAYOUT_WIDE_MIN_WIDTH;
+
   const [tab, setTab] = useState<MedicareTabId>("chat");
   const [chatDraft, setChatDraft] = useState("");
   const [chatSends, setChatSends] = useState<string[]>([]);
@@ -48,8 +63,144 @@ export function MedicareHelperScreen({ onOpenDevTools }: Props) {
     setChatDraft("");
   }, [chatDraft]);
 
+  const panels = (
+    <>
+      {tab === "chat" && <ChatPanel extraUserMessages={chatSends} layoutWide={wide} />}
+      {tab === "rx" && <RxPanel />}
+      {tab === "videos" && <VideosPanel />}
+      {tab === "analytics" && <AnalyticsPanel />}
+      {tab === "plan" && <BestPlanPanel />}
+      {tab === "agent" && <AgentPanel />}
+    </>
+  );
+
+  const chatComposer =
+    tab === "chat" ? (
+      <View style={[styles.inputBar, wide && styles.inputBarWide]}>
+        <View style={[styles.inputInner, wide && styles.inputInnerWide]}>
+          <Feather name="mic" size={wide ? 20 : 18} color="#5dcaa5" />
+          <TextInput
+            style={[styles.chatInput, webChatInputReset, wide && styles.chatInputWide]}
+            placeholder="Ask about your Medicare plan…"
+            placeholderTextColor="#7dcfb4"
+            value={chatDraft}
+            onChangeText={setChatDraft}
+            onSubmitEditing={sendChat}
+            returnKeyType="send"
+            blurOnSubmit={false}
+            accessibilityLabel="Medicare plan question"
+          />
+          <Pressable
+            onPress={sendChat}
+            style={({ pressed }) => [
+              styles.sendBtn,
+              wide && styles.sendBtnWide,
+              pressed && Platform.OS === "web" && { opacity: 0.85 },
+            ]}
+            accessibilityLabel="Send message"
+          >
+            <Feather name="send" size={wide ? 16 : 14} color={c.white} />
+          </Pressable>
+        </View>
+        {!wide && (
+          <View style={styles.homeRow}>
+            <View style={[styles.homeDot, { backgroundColor: c.primary }]} />
+            <View style={styles.homeBar} />
+            <View style={[styles.homeDot, { backgroundColor: c.borderLight }]} />
+          </View>
+        )}
+      </View>
+    ) : null;
+
+  if (wide) {
+    return (
+      <View style={styles.rootWide}>
+        <View style={styles.sideNav}>
+          <View style={styles.sideNavBrand}>
+            <View style={styles.sideLogoMark}>
+              <Feather name="shield" size={22} color={c.white} />
+            </View>
+            <Text style={[styles.sideAppTitle, { fontFamily: serif }]}>Medicare Helper</Text>
+            <Text style={styles.sideAppSub}>Powered by Plan-GPT</Text>
+          </View>
+          <ScrollView style={styles.sideNavScroll} showsVerticalScrollIndicator={false}>
+            {TABS.map((t) => {
+              const on = t.id === tab;
+              return (
+                <Pressable
+                  key={t.id}
+                  onPress={() => setTab(t.id)}
+                  style={[styles.sideNavItem, on && styles.sideNavItemOn]}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: on }}
+                >
+                  <Feather name={t.icon} size={18} color={on ? c.primary : "rgba(255,255,255,0.45)"} />
+                  <Text style={[styles.sideNavLbl, on && styles.sideNavLblOn]}>{t.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          <Pressable
+            onPress={onOpenDevTools}
+            style={styles.sideNavFooter}
+            accessibilityLabel="Developer tools"
+            accessibilityRole="button"
+          >
+            <Feather name="tool" size={17} color="rgba(255,255,255,0.4)" />
+            <Text style={styles.sideNavFooterTxt}>Dev tools</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.mainWide}>
+          <View style={styles.wideTopGreen}>
+            <View style={styles.wideTopRow}>
+              <View style={styles.widePlanBlock}>
+                <View style={styles.widePlanTitleRow}>
+                  <Text style={styles.widePlanName}>Humana Gold Plus HMO</Text>
+                  <View style={styles.activePillWide}>
+                    <View style={styles.activeDot} />
+                    <Text style={styles.activeText}>Active</Text>
+                  </View>
+                </View>
+                <View style={styles.wideDedRow}>
+                  <Text style={styles.dedLbl}>Rx Ded.</Text>
+                  <View style={styles.wideDedTrack}>
+                    <View style={[styles.dedFill, { width: "38.5%" }]} />
+                  </View>
+                  <Text style={styles.dedVal}>
+                    <Text style={styles.dedStrong}>$250</Text> used · <Text style={styles.dedStrong}>$400</Text> left
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.wideHeaderIcons}>
+                <Pressable onPress={onOpenDevTools} hitSlop={8} accessibilityLabel="Search">
+                  <Feather name="search" size={20} color="rgba(255,255,255,0.9)" />
+                </Pressable>
+                <Feather name="user" size={20} color="rgba(255,255,255,0.9)" />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.wideBodySplit}>
+            <View style={styles.wideCenterCol}>
+              <View style={styles.panelWrapWide}>{panels}</View>
+              {chatComposer}
+            </View>
+            <ScrollView
+              style={styles.wideRail}
+              contentContainerStyle={styles.wideRailContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <DesktopRail currentTab={tab} onOpenAgent={() => setTab("agent")} onOpenRx={() => setTab("rx")} />
+            </ScrollView>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   return (
-    <View style={[styles.root, WEB_PHONE_SHELL]}>
+    <View style={[styles.root, narrowWebPhoneShell(wide)]}>
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <View style={styles.headerLeft}>
@@ -105,58 +256,83 @@ export function MedicareHelperScreen({ onOpenDevTools }: Props) {
         })}
       </ScrollView>
 
-      <View style={styles.panelWrap}>
-        {tab === "chat" && <ChatPanel extraUserMessages={chatSends} />}
-        {tab === "rx" && <RxPanel />}
-        {tab === "videos" && <VideosPanel />}
-        {tab === "analytics" && <AnalyticsPanel />}
-        {tab === "plan" && <BestPlanPanel />}
-        {tab === "agent" && <AgentPanel />}
+      <View style={styles.panelWrap}>{panels}</View>
+      {chatComposer}
+    </View>
+  );
+}
+
+function DesktopRail({
+  currentTab,
+  onOpenAgent,
+  onOpenRx,
+}: {
+  currentTab: MedicareTabId;
+  onOpenAgent: () => void;
+  onOpenRx: () => void;
+}) {
+  return (
+    <View style={styles.railInner}>
+      <Text style={styles.railSectionTitle}>Your plan</Text>
+      <View style={styles.railCard}>
+        <Text style={styles.railCardKicker}>Medicare Advantage</Text>
+        <Text style={styles.railCardPlan}>Humana Gold Plus HMO</Text>
+        <View style={styles.railStatusRow}>
+          <View style={styles.railDot} />
+          <Text style={styles.railStatusTxt}>Enrollment active</Text>
+        </View>
       </View>
 
-      {tab === "chat" && (
-        <View style={styles.inputBar}>
-          <View style={styles.inputInner}>
-            <Feather name="mic" size={18} color="#5dcaa5" />
-            <TextInput
-              style={[styles.chatInput, webChatInputReset]}
-              placeholder="Ask about your Medicare plan…"
-              placeholderTextColor="#7dcfb4"
-              value={chatDraft}
-              onChangeText={setChatDraft}
-              onSubmitEditing={sendChat}
-              returnKeyType="send"
-              blurOnSubmit={false}
-              accessibilityLabel="Medicare plan question"
-            />
-            <Pressable
-              onPress={sendChat}
-              style={({ pressed }) => [styles.sendBtn, pressed && Platform.OS === "web" && { opacity: 0.85 }]}
-              accessibilityLabel="Send message"
-            >
-              <Feather name="send" size={14} color={c.white} />
-            </Pressable>
-          </View>
-          <View style={styles.homeRow}>
-            <View style={[styles.homeDot, { backgroundColor: c.primary }]} />
-            <View style={styles.homeBar} />
-            <View style={[styles.homeDot, { backgroundColor: c.borderLight }]} />
-          </View>
+      <Text style={styles.railSectionTitle}>Prescription costs</Text>
+      <View style={styles.railCard}>
+        <Text style={styles.railMuted}>Rx deductible progress</Text>
+        <View style={styles.railTrack}>
+          <View style={[styles.railFill, { width: "38.5%" }]} />
+        </View>
+        <Text style={styles.railStrong}>
+          $250 <Text style={styles.railMutedInline}>used</Text> · $400 <Text style={styles.railMutedInline}>remaining</Text>
+        </Text>
+        <Pressable onPress={onOpenRx} style={styles.railLinkBtn}>
+          <Feather name="heart" size={15} color={c.primary} />
+          <Text style={styles.railLinkBtnTxt}>Compare pharmacy prices</Text>
+          <Feather name="chevron-right" size={16} color={c.primary} />
+        </Pressable>
+      </View>
+
+      <Text style={styles.railSectionTitle}>Support</Text>
+      <View style={styles.railCard}>
+        <Text style={styles.railBody}>
+          Questions about benefits, costs, or enrollment? Your licensed agent can help.
+        </Text>
+        <Pressable onPress={onOpenAgent} style={styles.railPrimaryBtn}>
+          <Feather name="user" size={16} color={c.white} />
+          <Text style={styles.railPrimaryBtnTxt}>My Agent</Text>
+        </Pressable>
+      </View>
+
+      {currentTab === "chat" && (
+        <View style={[styles.railCard, styles.railHintCard]}>
+          <Feather name="info" size={16} color={c.primaryDark} />
+          <Text style={styles.railHint}>
+            Tip: Ask Plan-GPT about dental, vision, MTM, or in-network providers — answers use your plan context.
+          </Text>
         </View>
       )}
     </View>
   );
 }
 
-function ChatPanel({ extraUserMessages }: { extraUserMessages: string[] }) {
+function ChatPanel({ extraUserMessages, layoutWide }: { extraUserMessages: string[]; layoutWide?: boolean }) {
+  const pad = layoutWide ? styles.scrollPadWide : styles.scrollPad;
   return (
     <ScrollView
       style={styles.scroll}
-      contentContainerStyle={styles.scrollPad}
+      contentContainerStyle={pad}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
       <MsgRow
+        layoutWide={layoutWide}
         body={
           <>
             <Text style={styles.brandLbl}>Plan-GPT</Text>
@@ -176,11 +352,12 @@ function ChatPanel({ extraUserMessages }: { extraUserMessages: string[] }) {
         }
       />
       <View style={styles.userWrap}>
-        <View style={styles.userBubble}>
+        <View style={[styles.userBubble, layoutWide && styles.userBubbleWide]}>
           <Text style={styles.userText}>What's covered under my Medicare Advantage plan?</Text>
         </View>
       </View>
       <MsgRow
+        layoutWide={layoutWide}
         body={
           <>
             <Text style={styles.brandLbl}>Plan-GPT</Text>
@@ -195,6 +372,7 @@ function ChatPanel({ extraUserMessages }: { extraUserMessages: string[] }) {
         }
       />
       <MsgRow
+        layoutWide={layoutWide}
         body={
           <>
             <Text style={styles.brandLbl}>Plan-GPT</Text>
@@ -216,7 +394,7 @@ function ChatPanel({ extraUserMessages }: { extraUserMessages: string[] }) {
       />
       {extraUserMessages.map((text, i) => (
         <View key={`u-${i}`} style={styles.userWrap}>
-          <View style={styles.userBubble}>
+          <View style={[styles.userBubble, layoutWide && styles.userBubbleWide]}>
             <Text style={styles.userText}>{text}</Text>
           </View>
         </View>
@@ -234,13 +412,13 @@ function Bullet({ text, highlight }: { text: string; highlight: boolean }) {
   );
 }
 
-function MsgRow({ body }: { body: React.ReactNode }) {
+function MsgRow({ body, layoutWide }: { body: React.ReactNode; layoutWide?: boolean }) {
   return (
     <View style={styles.msgRow}>
-      <View style={styles.aiAv}>
-        <Feather name="shield" size={14} color={c.white} />
+      <View style={[styles.aiAv, layoutWide && styles.aiAvWide]}>
+        <Feather name="shield" size={layoutWide ? 16 : 14} color={c.white} />
       </View>
-      <View style={styles.aiBubble}>{body}</View>
+      <View style={[styles.aiBubble, layoutWide && styles.aiBubbleWide]}>{body}</View>
     </View>
   );
 }
@@ -705,6 +883,204 @@ function AgentPanel() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: c.pageBg, minHeight: 0 },
+  rootWide: {
+    flex: 1,
+    flexDirection: "row",
+    minHeight: 0,
+    backgroundColor: c.adminBorder,
+  },
+  sideNav: {
+    width: 236,
+    flexShrink: 0,
+    backgroundColor: c.adminNav,
+    paddingTop: Platform.OS === "ios" ? 14 : 16,
+    paddingBottom: 12,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: "rgba(255,255,255,0.08)",
+  },
+  sideNavBrand: {
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.08)",
+  },
+  sideLogoMark: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: c.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  sideAppTitle: { color: c.white, fontSize: 19, fontWeight: "700" },
+  sideAppSub: { color: "rgba(255,255,255,0.42)", fontSize: 11, marginTop: 4, letterSpacing: 0.4 },
+  sideNavScroll: { flex: 1, paddingTop: 12 },
+  sideNavItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginHorizontal: 10,
+    marginVertical: 3,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  sideNavItemOn: {
+    backgroundColor: "rgba(29,158,117,0.22)",
+  },
+  sideNavLbl: { color: "rgba(255,255,255,0.55)", fontSize: 14, fontWeight: "600" },
+  sideNavLblOn: { color: c.primary },
+  sideNavFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginHorizontal: 14,
+    marginTop: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  sideNavFooterTxt: { color: "rgba(255,255,255,0.38)", fontSize: 12, fontWeight: "600" },
+  mainWide: { flex: 1, minWidth: 0, minHeight: 0, flexDirection: "column", backgroundColor: c.pageBg },
+  wideTopGreen: {
+    backgroundColor: c.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    flexShrink: 0,
+  },
+  wideTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 16,
+  },
+  widePlanBlock: { flex: 1, minWidth: 0 },
+  widePlanTitleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 10 },
+  widePlanName: { color: c.white, fontSize: 18, fontWeight: "700", flexShrink: 1 },
+  activePillWide: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  wideDedRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  wideDedTrack: {
+    flex: 1,
+    maxWidth: 420,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(0,0,0,0.2)",
+    overflow: "hidden",
+  },
+  wideHeaderIcons: { flexDirection: "row", alignItems: "center", gap: 18, paddingTop: 2 },
+  wideBodySplit: {
+    flex: 1,
+    flexDirection: "row",
+    minHeight: 0,
+  },
+  wideCenterCol: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    flexDirection: "column",
+  },
+  panelWrapWide: { flex: 1, minHeight: 0 },
+  wideRail: {
+    width: 300,
+    flexShrink: 0,
+    backgroundColor: "#f4f6f8",
+    borderLeftWidth: 1,
+    borderLeftColor: c.adminBorder,
+  },
+  wideRailContent: { padding: 16, paddingBottom: 32 },
+  railInner: { gap: 4 },
+  railSectionTitle: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: c.adminMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  railCard: {
+    backgroundColor: c.white,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.adminBorder,
+    padding: 14,
+    marginBottom: 4,
+  },
+  railHintCard: { flexDirection: "row", gap: 10, alignItems: "flex-start", backgroundColor: c.mintBg, borderColor: c.mint },
+  railCardKicker: { fontSize: 11, color: c.adminMuted, fontWeight: "600", marginBottom: 4 },
+  railCardPlan: { fontSize: 16, fontWeight: "700", color: c.text, lineHeight: 22 },
+  railStatusRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  railDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: c.mint },
+  railStatusTxt: { fontSize: 13, color: c.primaryDark, fontWeight: "600" },
+  railMuted: { fontSize: 12, color: c.adminMuted, marginBottom: 8 },
+  railMutedInline: { color: c.adminMuted, fontWeight: "400" },
+  railTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: c.borderSoft,
+    overflow: "hidden",
+    marginBottom: 8,
+  },
+  railFill: { height: "100%", backgroundColor: c.primary, borderRadius: 4 },
+  railStrong: { fontSize: 14, fontWeight: "700", color: c.text },
+  railLinkBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.adminBorder,
+  },
+  railLinkBtnTxt: { flex: 1, fontSize: 14, fontWeight: "700", color: c.primary },
+  railBody: { fontSize: 13, color: c.text, lineHeight: 20, marginBottom: 12 },
+  railPrimaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: c.primary,
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  railPrimaryBtnTxt: { fontSize: 14, fontWeight: "700", color: c.white },
+  railHint: { flex: 1, fontSize: 12, color: c.primaryDeep, lineHeight: 18 },
+  scrollPadWide: { paddingHorizontal: 28, paddingVertical: 20, paddingBottom: 32, gap: 14 },
+  aiBubbleWide: {
+    flexGrow: 0,
+    flexShrink: 1,
+    maxWidth: 720,
+    alignSelf: "flex-start",
+  },
+  aiAvWide: { width: 34, height: 34, borderRadius: 17 },
+  userBubbleWide: { maxWidth: 560 },
+  inputBarWide: {
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 20,
+    backgroundColor: c.white,
+    borderTopWidth: 1,
+    borderTopColor: c.adminBorder,
+  },
+  inputInnerWide: {
+    maxWidth: 960,
+    alignSelf: "center",
+    width: "100%",
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 28,
+  },
+  chatInputWide: { fontSize: 15 },
+  sendBtnWide: { width: 40, height: 40, borderRadius: 20 },
   header: {
     backgroundColor: c.primary,
     paddingTop: Platform.OS === "ios" ? 8 : 12,
