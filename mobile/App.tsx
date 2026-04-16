@@ -42,6 +42,12 @@ export default function App() {
     "https://example-bucket.s3.amazonaws.com/models/phi-3-mini-q4.gguf"
   );
   const [modelFilename, setModelFilename] = useState<string>("model.gguf");
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string>(
+    (process.env.EXPO_PUBLIC_OLLAMA_BASE_URL || "").trim() || "http://localhost:11434"
+  );
+  const [ollamaModel, setOllamaModel] = useState<string>(
+    (process.env.EXPO_PUBLIC_OLLAMA_MODEL || "").trim() || "llama3.1"
+  );
 
   useEffect(() => {
     let sub: any | null = null;
@@ -121,7 +127,11 @@ export default function App() {
 
   return (
     <SafeAreaView style={[{ flex: 1, minHeight: 0 }, outerBg]}>
-      <MedicareHelperScreen onOpenDevTools={() => setDevOpen(true)} />
+      <MedicareHelperScreen
+        onOpenDevTools={() => setDevOpen(true)}
+        ollamaBaseUrl={ollamaBaseUrl}
+        ollamaModel={ollamaModel}
+      />
 
       <Modal visible={devOpen} animationType="slide" onRequestClose={() => setDevOpen(false)}>
         <SafeAreaView style={{ flex: 1, backgroundColor: "#fff" }}>
@@ -146,6 +156,50 @@ export default function App() {
             <Text style={{ fontSize: 15, color: "#555", marginBottom: 12, lineHeight: 22 }}>
               Edge-AI POC: model download, prompts, payer OAuth handoff, and FHIR login.
             </Text>
+
+            <Text style={{ fontSize: 13, fontWeight: "700", color: "#1a2332", marginTop: 6 }}>LLM chat (Ollama)</Text>
+            <Text style={{ fontSize: 12, color: "#666", marginTop: 6, lineHeight: 18 }}>
+              Point the UI at an Ollama server (local or private network) for chat responses. For web builds, the Ollama
+              endpoint must be reachable from the browser and allow cross-origin requests.
+            </Text>
+
+            <View style={{ height: 10 }} />
+
+            <Text style={{ fontWeight: "600" }}>Ollama base URL</Text>
+            <TextInput
+              value={ollamaBaseUrl}
+              onChangeText={setOllamaBaseUrl}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="http://localhost:11434"
+              style={{
+                borderWidth: 1,
+                borderColor: "#ccc",
+                padding: 10,
+                borderRadius: 8,
+                marginTop: 6,
+              }}
+            />
+
+            <View style={{ height: 12 }} />
+
+            <Text style={{ fontWeight: "600" }}>Ollama model</Text>
+            <TextInput
+              value={ollamaModel}
+              onChangeText={setOllamaModel}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="llama3.1"
+              style={{
+                borderWidth: 1,
+                borderColor: "#ccc",
+                padding: 10,
+                borderRadius: 8,
+                marginTop: 6,
+              }}
+            />
+
+            <View style={{ height: 18 }} />
 
             <Text style={{ fontWeight: "600" }}>Model S3 URL</Text>
             <TextInput

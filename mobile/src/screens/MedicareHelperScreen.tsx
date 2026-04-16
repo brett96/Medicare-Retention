@@ -13,6 +13,7 @@ import {
 } from "react-native";
 
 import { planGpt as c } from "../theme/planGpt";
+import { ollamaChat, type OllamaChatMessage } from "../utils/ollama";
 
 /** Viewports this wide (or wider) use the desktop / tablet-landscape shell. */
 export const MEDICARE_LAYOUT_WIDE_MIN_WIDTH = 900;
@@ -32,6 +33,10 @@ export type MedicareTabId = "chat" | "rx" | "videos" | "analytics" | "plan" | "a
 
 type Props = {
   onOpenDevTools?: () => void;
+  /** Example: http://localhost:11434 or https://ollama.internal.example */
+  ollamaBaseUrl?: string;
+  /** Example: llama3.1 */
+  ollamaModel?: string;
 };
 
 const TABS: { id: MedicareTabId; label: string; icon: React.ComponentProps<typeof Feather>["name"] }[] = [
@@ -48,24 +53,63 @@ const serif = Platform.select({ ios: "Georgia", android: "serif", web: "Georgia,
 const webChatInputReset =
   Platform.OS === "web" ? ({ outlineStyle: "none" as const, borderWidth: 0 } as const) : null;
 
-export function MedicareHelperScreen({ onOpenDevTools }: Props) {
+type LocalChatMessage = { role: "user" | "assistant"; content: string };
+
+const DEFAULT_SYSTEM_PROMPT =
+  "You are Plan-GPT, a Medicare Advantage plan assistant. Be concise and helpful. " +
+  "If the user asks about costs/coverage, answer generally and suggest contacting their agent for plan-specific confirmation.";
+
+export function MedicareHelperScreen({ onOpenDevTools, ollamaBaseUrl, ollamaModel }: Props) {
   const { width } = useWindowDimensions();
   const wide = width >= MEDICARE_LAYOUT_WIDE_MIN_WIDTH;
 
   const [tab, setTab] = useState<MedicareTabId>("chat");
   const [chatDraft, setChatDraft] = useState("");
-  const [chatSends, setChatSends] = useState<string[]>([]);
+  const [chatHistory, setChatHistory] = useState<LocalChatMessage[]>([]);
+  const [chatPending, setChatPending] = useState(false);
 
-  const sendChat = useCallback(() => {
+  const sendChat = useCallback(async () => {
     const t = chatDraft.trim();
     if (!t) return;
-    setChatSends((prev) => [...prev, t]);
+    if (chatPending) return;
+
+    const baseUrl = (ollamaBaseUrl || process.env.EXPO_PUBLIC_OLLAMA_BASE_URL || "").trim();
+    const model = (ollamaModel || process.env.EXPO_PUBLIC_OLLAMA_MODEL || "llama3.1").trim();
+
+    setChatHistory((prev) => [...prev, { role: "user", content: t }]);
     setChatDraft("");
-  }, [chatDraft]);
+    setChatPending(true);
+
+    try {
+      const msgs: OllamaChatMessage[] = [
+        { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+        ...chatHistory.map((m) => ({ role: m.role, content: m.content }) as OllamaChatMessage),
+        { role: "user", content: t },
+      ];
+
+      const out = await ollamaChat({ baseUrl, model, messages: msgs, timeoutMs: 60_000 });
+      setChatHistory((prev) => [...prev, { role: "assistant", content: out.content.trim() }]);
+    } catch (e: any) {
+      const msg = (e?.message ?? String(e)).trim();
+      setChatHistory((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            `I couldn’t reach the configured Ollama server.\n\n` +
+            `- Base URL: ${baseUrl || "(not set)"}\n` +
+            `- Model: ${model || "(not set)"}\n\n` +
+            `Error: ${msg}`,
+        },
+      ]);
+    } finally {
+      setChatPending(false);
+    }
+  }, [chatDraft, chatHistory, chatPending, ollamaBaseUrl, ollamaModel]);
 
   const panels = (
     <>
-      {tab === "chat" && <ChatPanel extraUserMessages={chatSends} layoutWide={wide} />}
+      {tab === "chat" && <ChatPanel history={chatHistory} pending={chatPending} layoutWide={wide} />}
       {tab === "rx" && <RxPanel />}
       {tab === "videos" && <VideosPanel />}
       {tab === "analytics" && <AnalyticsPanel />}
@@ -322,7 +366,15 @@ function DesktopRail({
   );
 }
 
-function ChatPanel({ extraUserMessages, layoutWide }: { extraUserMessages: string[]; layoutWide?: boolean }) {
+function ChatPanel({
+  history,
+  pending,
+  layoutWide,
+}: {
+  history: LocalChatMessage[];
+  pending: boolean;
+  layoutWide?: boolean;
+}) {
   const pad = layoutWide ? styles.scrollPadWide : styles.scrollPad;
   return (
     <ScrollView
@@ -392,13 +444,42 @@ function ChatPanel({ extraUserMessages, layoutWide }: { extraUserMessages: strin
           </>
         }
       />
-      {extraUserMessages.map((text, i) => (
-        <View key={`u-${i}`} style={[styles.userWrap, layoutWide && styles.userWrapWide]}>
-          <View style={[styles.userBubble, layoutWide && styles.userBubbleWide]}>
-            <Text style={styles.userText}>{text}</Text>
-          </View>
-        </View>
-      ))}
+
+      {history.map((m, i) => {
+        if (m.role === "user") {
+          return (
+            <View key={`m-${i}`} style={[styles.userWrap, layoutWide && styles.userWrapWide]}>
+              <View style={[styles.userBubble, layoutWide && styles.userBubbleWide]}>
+                <Text style={styles.userText}>{m.content}</Text>
+              </View>
+            </View>
+          );
+        }
+        return (
+          <MsgRow
+            key={`m-${i}`}
+            layoutWide={layoutWide}
+            body={
+              <>
+                <Text style={styles.brandLbl}>Plan-GPT</Text>
+                <Text style={styles.bubbleText}>{m.content}</Text>
+              </>
+            }
+          />
+        );
+      })}
+
+      {pending && (
+        <MsgRow
+          layoutWide={layoutWide}
+          body={
+            <>
+              <Text style={styles.brandLbl}>Plan-GPT</Text>
+              <Text style={styles.bubbleText}>Thinking…</Text>
+            </>
+          }
+        />
+      )}
     </ScrollView>
   );
 }
