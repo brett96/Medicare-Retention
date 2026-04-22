@@ -43,10 +43,10 @@ export default function App() {
   );
   const [modelFilename, setModelFilename] = useState<string>("model.gguf");
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string>(
-    (process.env.EXPO_PUBLIC_OLLAMA_BASE_URL || "").trim() || "http://localhost:11434"
+    (process.env.EXPO_PUBLIC_OLLAMA_BASE_URL || "").trim() || "https://contribute-cfr-grab-kansas.trycloudflare.com"
   );
   const [ollamaModel, setOllamaModel] = useState<string>(
-    (process.env.EXPO_PUBLIC_OLLAMA_MODEL || "").trim() || "llama3.1"
+    (process.env.EXPO_PUBLIC_OLLAMA_MODEL || "").trim() || "llama3:8b"
   );
 
   useEffect(() => {
@@ -171,7 +171,7 @@ export default function App() {
               onChangeText={setOllamaBaseUrl}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="http://localhost:11434"
+              placeholder="https://contribute-cfr-grab-kansas.trycloudflare.com"
               style={{
                 borderWidth: 1,
                 borderColor: "#ccc",
@@ -189,7 +189,7 @@ export default function App() {
               onChangeText={setOllamaModel}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="llama3.1"
+              placeholder="llama3:8b"
               style={{
                 borderWidth: 1,
                 borderColor: "#ccc",

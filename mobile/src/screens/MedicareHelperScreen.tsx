@@ -35,7 +35,7 @@ type Props = {
   onOpenDevTools?: () => void;
   /** Example: http://localhost:11434 or https://ollama.internal.example */
   ollamaBaseUrl?: string;
-  /** Example: llama3.1 */
+  /** Example: llama3:8b */
   ollamaModel?: string;
 };
 
@@ -74,7 +74,7 @@ export function MedicareHelperScreen({ onOpenDevTools, ollamaBaseUrl, ollamaMode
     if (chatPending) return;
 
     const baseUrl = (ollamaBaseUrl || process.env.EXPO_PUBLIC_OLLAMA_BASE_URL || "").trim();
-    const model = (ollamaModel || process.env.EXPO_PUBLIC_OLLAMA_MODEL || "llama3.1").trim();
+    const model = (ollamaModel || process.env.EXPO_PUBLIC_OLLAMA_MODEL || "llama3:8b").trim();
 
     setChatHistory((prev) => [...prev, { role: "user", content: t }]);
     setChatDraft("");
@@ -257,8 +257,11 @@ export function MedicareHelperScreen({ onOpenDevTools, ollamaBaseUrl, ollamaMode
             </View>
           </View>
           <View style={styles.headerIcons}>
-            <Pressable onPress={onOpenDevTools} hitSlop={8} accessibilityLabel="Developer tools">
+            <Pressable onPress={() => {}} hitSlop={8} accessibilityLabel="Search">
               <Feather name="search" size={18} color="rgba(255,255,255,0.85)" />
+            </Pressable>
+            <Pressable onPress={onOpenDevTools} hitSlop={8} accessibilityLabel="Developer tools">
+              <Feather name="tool" size={18} color="rgba(255,255,255,0.85)" />
             </Pressable>
             <Feather name="user" size={18} color="rgba(255,255,255,0.85)" />
           </View>
