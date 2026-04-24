@@ -22,6 +22,7 @@ from medicare_retention_api.auth_views import (
     proxy_medication_statement,
     proxy_patient,
 )
+from medicare_retention_api.rag_views import rag_ask
 
 
 def health(request):
@@ -58,6 +59,7 @@ urlpatterns = [
     path("authorize/", authorize_legacy),
     path("callback", callback_legacy),
     path("callback/", callback_legacy),
+    path("api/rag/ask/", rag_ask),
     path("api/auth/<str:payer_id>/authorize/", oauth_authorize),
     path("api/auth/<str:payer_id>/callback/", oauth_callback),
     path("api/auth/exchange/", exchange_code),

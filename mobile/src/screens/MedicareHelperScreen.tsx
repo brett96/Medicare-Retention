@@ -73,6 +73,7 @@ export function MedicareHelperScreen({ onOpenDevTools, ollamaBaseUrl, ollamaMode
     if (!t) return;
     if (chatPending) return;
 
+    const apiBase = ((process.env.EXPO_PUBLIC_API_BASE_URL || "").trim() || "").replace(/\/+$/, "");
     const baseUrl = (ollamaBaseUrl || process.env.EXPO_PUBLIC_OLLAMA_BASE_URL || "").trim();
     const model = (ollamaModel || process.env.EXPO_PUBLIC_OLLAMA_MODEL || "llama3:8b").trim();
 
@@ -81,14 +82,31 @@ export function MedicareHelperScreen({ onOpenDevTools, ollamaBaseUrl, ollamaMode
     setChatPending(true);
 
     try {
-      const msgs: OllamaChatMessage[] = [
-        { role: "system", content: DEFAULT_SYSTEM_PROMPT },
-        ...chatHistory.map((m) => ({ role: m.role, content: m.content }) as OllamaChatMessage),
-        { role: "user", content: t },
-      ];
-
-      const out = await ollamaChat({ baseUrl, model, messages: msgs, timeoutMs: 60_000 });
-      setChatHistory((prev) => [...prev, { role: "assistant", content: out.content.trim() }]);
+      if (apiBase) {
+        const res = await fetch(`${apiBase}/api/rag/ask/`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ question: t }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          const msg = (json && (json.detail || json.error || json.message)) || `HTTP ${res.status}`;
+          throw new Error(`RAG request failed: ${msg}`);
+        }
+        const answer = json?.answer;
+        if (typeof answer !== "string" || !answer.trim()) {
+          throw new Error("RAG response missing answer");
+        }
+        setChatHistory((prev) => [...prev, { role: "assistant", content: answer.trim() }]);
+      } else {
+        const msgs: OllamaChatMessage[] = [
+          { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+          ...chatHistory.map((m) => ({ role: m.role, content: m.content }) as OllamaChatMessage),
+          { role: "user", content: t },
+        ];
+        const out = await ollamaChat({ baseUrl, model, messages: msgs, timeoutMs: 60_000 });
+        setChatHistory((prev) => [...prev, { role: "assistant", content: out.content.trim() }]);
+      }
     } catch (e: any) {
       const msg = (e?.message ?? String(e)).trim();
       setChatHistory((prev) => [
@@ -97,8 +115,9 @@ export function MedicareHelperScreen({ onOpenDevTools, ollamaBaseUrl, ollamaMode
           role: "assistant",
           content:
             `I couldn’t reach the configured Ollama server.\n\n` +
-            `- Base URL: ${baseUrl || "(not set)"}\n` +
-            `- Model: ${model || "(not set)"}\n\n` +
+            `- API base: ${apiBase || "(not set)"}\n` +
+            `- Ollama Base URL: ${baseUrl || "(not set)"}\n` +
+            `- Ollama Model: ${model || "(not set)"}\n\n` +
             `Error: ${msg}`,
         },
       ]);
